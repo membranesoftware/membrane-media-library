@@ -1,5 +1,5 @@
 /*
-* Copyright 2018 Membrane Software <author@membranesoftware.com>
+* Copyright 2019 Membrane Software <author@membranesoftware.com>
 *                 https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
@@ -32,9 +32,9 @@
 
 "use strict";
 
-var Path = require ("path");
+const Path = require ("path");
 
-exports.VERSION = "4-stable-441e40f2";
+exports.VERSION = "5-stable-ee4096bf";
 
 exports.BASE_DIRECTORY = process.cwd ();
 exports.SOURCE_DIRECTORY = Path.join (exports.BASE_DIRECTORY, "src");
@@ -59,7 +59,6 @@ exports.AUTHORIZE_SESSION_DURATION = 60000; // milliseconds
 exports.MAX_TASK_COUNT = 1;
 exports.INTENT_WRITE_PERIOD = 300; // seconds
 exports.FFMPEG_PATH = "";
-exports.CURL_PATH = "";
 exports.MONGOD_PATH = "/usr/bin/mongod";
 exports.STORE_PORT = 27017;
 exports.STORE_DATABASE = "membrane";
@@ -68,7 +67,12 @@ exports.STORE_HOST = "127.0.0.1";
 exports.STORE_USERNAME = "";
 exports.STORE_PASSWORD = "";
 exports.STORE_RUN_PERIOD = 60; // seconds
-
 exports.HEARTBEAT_PERIOD = 500; // milliseconds
+
+exports.STREAM_CACHE_PATH = "stream-cache";
+exports.STREAM_HLS_PATH = "hls";
+exports.STREAM_THUMBNAIL_PATH = "thumbnail";
+exports.STREAM_INDEX_FILENAME = "index.m3u8";
+exports.STREAM_RECORD_FILENAME = "record";
 
 global.App = exports;

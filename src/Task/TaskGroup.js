@@ -1,5 +1,5 @@
 /*
-* Copyright 2018 Membrane Software <author@membranesoftware.com>
+* Copyright 2019 Membrane Software <author@membranesoftware.com>
 *                 https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
@@ -32,12 +32,12 @@
 
 "use strict";
 
-var App = global.App || { };
-var EventEmitter = require ("events").EventEmitter;
-var Log = require (App.SOURCE_DIRECTORY + "/Log");
-var SystemInterface = require (App.SOURCE_DIRECTORY + "/SystemInterface");
-var RepeatTask = require (App.SOURCE_DIRECTORY + "/RepeatTask");
-var Task = require (App.SOURCE_DIRECTORY + "/Task/Task");
+const App = global.App || { };
+const EventEmitter = require ("events").EventEmitter;
+const Log = require (App.SOURCE_DIRECTORY + "/Log");
+const SystemInterface = require (App.SOURCE_DIRECTORY + "/SystemInterface");
+const RepeatTask = require (App.SOURCE_DIRECTORY + "/RepeatTask");
+const Task = require (App.SOURCE_DIRECTORY + "/Task/Task");
 
 class TaskGroup {
 	constructor () {

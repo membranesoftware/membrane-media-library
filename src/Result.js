@@ -1,5 +1,5 @@
 /*
-* Copyright 2018 Membrane Software <author@membranesoftware.com>
+* Copyright 2019 Membrane Software <author@membranesoftware.com>
 *                 https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without

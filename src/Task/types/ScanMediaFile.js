@@ -1,5 +1,5 @@
 /*
-* Copyright 2018 Membrane Software <author@membranesoftware.com>
+* Copyright 2019 Membrane Software <author@membranesoftware.com>
 *                 https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
@@ -30,14 +30,14 @@
 */
 "use strict";
 
-var App = global.App || { };
-var Fs = require ("fs");
-var Path = require ("path");
-var Log = require (App.SOURCE_DIRECTORY + "/Log");
-var FsUtil = require (App.SOURCE_DIRECTORY + "/FsUtil");
-var SystemInterface = require (App.SOURCE_DIRECTORY + "/SystemInterface");
-var TranscodeOutputParser = require (App.SOURCE_DIRECTORY + "/Common/TranscodeOutputParser");
-var TaskBase = require (App.SOURCE_DIRECTORY + "/Task/TaskBase");
+const App = global.App || { };
+const Fs = require ("fs");
+const Path = require ("path");
+const Log = require (App.SOURCE_DIRECTORY + "/Log");
+const FsUtil = require (App.SOURCE_DIRECTORY + "/FsUtil");
+const SystemInterface = require (App.SOURCE_DIRECTORY + "/SystemInterface");
+const TranscodeOutputParser = require (App.SOURCE_DIRECTORY + "/Common/TranscodeOutputParser");
+const TaskBase = require (App.SOURCE_DIRECTORY + "/Task/TaskBase");
 
 class ScanMediaFile extends TaskBase {
 	constructor () {

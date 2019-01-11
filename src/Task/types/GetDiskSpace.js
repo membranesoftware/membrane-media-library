@@ -1,5 +1,5 @@
 /*
-* Copyright 2018 Membrane Software <author@membranesoftware.com>
+* Copyright 2019 Membrane Software <author@membranesoftware.com>
 *                 https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
@@ -30,18 +30,18 @@
 */
 "use strict";
 
-var App = global.App || { };
-var Path = require ("path");
-var Log = require (App.SOURCE_DIRECTORY + "/Log");
-var FsUtil = require (App.SOURCE_DIRECTORY + "/FsUtil");
-var SystemInterface = require (App.SOURCE_DIRECTORY + "/SystemInterface");
-var TaskBase = require (App.SOURCE_DIRECTORY + "/Task/TaskBase");
+const App = global.App || { };
+const Path = require ("path");
+const Log = require (App.SOURCE_DIRECTORY + "/Log");
+const FsUtil = require (App.SOURCE_DIRECTORY + "/FsUtil");
+const SystemInterface = require (App.SOURCE_DIRECTORY + "/SystemInterface");
+const TaskBase = require (App.SOURCE_DIRECTORY + "/Task/TaskBase");
 
 class GetDiskSpace extends TaskBase {
 	constructor () {
 		super ();
 		this.name = "Get disk space";
-		this.description = "Gather data regarding available disk space for a target path and generate a result object with number fields \"total\", \"used\", and \"free\", specified in kilobytes";
+		this.description = "Gather data regarding available disk space for a target path and generate a result object with number fields \"total\", \"used\", and \"free\", specified in bytes";
 
 		this.configureParams = [
 			{

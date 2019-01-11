@@ -1,5 +1,5 @@
 /*
-* Copyright 2018 Membrane Software <author@membranesoftware.com>
+* Copyright 2019 Membrane Software <author@membranesoftware.com>
 *                 https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
@@ -30,21 +30,21 @@
 */
 "use strict";
 
-var App = global.App || { };
-var Util = require ("util");
-var Fs = require ("fs");
-var Path = require ("path");
-var Async = require ("async");
-var Crypto = require ("crypto");
-var UuidV4 = require ("uuid/v4");
-var Result = require (App.SOURCE_DIRECTORY + "/Result");
-var Log = require (App.SOURCE_DIRECTORY + "/Log");
-var FsUtil = require (App.SOURCE_DIRECTORY + "/FsUtil");
-var RepeatTask = require (App.SOURCE_DIRECTORY + "/RepeatTask");
-var SystemInterface = require (App.SOURCE_DIRECTORY + "/SystemInterface");
-var Task = require (App.SOURCE_DIRECTORY + "/Task/Task");
-var ServerBase = require (App.SOURCE_DIRECTORY + "/Server/ServerBase");
-var TranscodeOutputParser = require (App.SOURCE_DIRECTORY + "/Common/TranscodeOutputParser");
+const App = global.App || { };
+const Util = require ("util");
+const Fs = require ("fs");
+const Path = require ("path");
+const Async = require ("async");
+const Crypto = require ("crypto");
+const UuidV4 = require ("uuid/v4");
+const Result = require (App.SOURCE_DIRECTORY + "/Result");
+const Log = require (App.SOURCE_DIRECTORY + "/Log");
+const FsUtil = require (App.SOURCE_DIRECTORY + "/FsUtil");
+const RepeatTask = require (App.SOURCE_DIRECTORY + "/RepeatTask");
+const SystemInterface = require (App.SOURCE_DIRECTORY + "/SystemInterface");
+const Task = require (App.SOURCE_DIRECTORY + "/Task/Task");
+const ServerBase = require (App.SOURCE_DIRECTORY + "/Server/ServerBase");
+const TranscodeOutputParser = require (App.SOURCE_DIRECTORY + "/Common/TranscodeOutputParser");
 
 const GET_FILE_PATH = "/mediaserver/getfile";
 const THUMBNAIL_PATH = "/mediaserver/thumbnail.jpg";
@@ -98,6 +98,7 @@ class MediaServer extends ServerBase {
 		this.scanPathMap = { };
 
 		this.scanMediaDirectoryTask = new RepeatTask ();
+		this.isScanningMediaDirectory = false;
 		this.taskWaitCount = 0;
 	}
 
@@ -107,6 +108,9 @@ class MediaServer extends ServerBase {
 			switch (cmdInv.command) {
 				case SystemInterface.CommandId.GetStatus: {
 					return (this.getStatus ());
+				}
+				case SystemInterface.CommandId.ScanMediaItems: {
+					return (this.scanMediaItems ());
 				}
 			}
 
@@ -166,6 +170,20 @@ class MediaServer extends ServerBase {
 		this.scanMediaDirectoryTask.stop ();
 		App.systemAgent.stopDataStore ();
 		process.nextTick (stopCallback);
+	}
+
+	// Execute actions appropriate when the server has been successfully configured
+	doConfigure () {
+		if (this.isRunning) {
+			if (this.configureMap.scanPeriod > 0) {
+				this.scanMediaDirectoryTask.setRepeating ((callback) => {
+					this.scanMediaDirectory (callback);
+				}, this.configureMap.scanPeriod * 1000);
+			}
+			else {
+				this.scanMediaDirectoryTask.stop ();
+			}
+		}
 	}
 
 	// Add subclass-specific fields to the provided server configuration object, covering default values not present in the delta configuration
@@ -363,12 +381,29 @@ class MediaServer extends ServerBase {
 		};
 	}
 
+	// Execute a ScanMediaItems command and write result commands to the provided client
+	scanMediaItems () {
+		if (this.configureMap.scanPeriod > 0) {
+			this.scanMediaDirectoryTask.setNextRepeat (0);
+		}
+		else {
+			if (! this.isScanningMediaDirectory) {
+				this.scanMediaDirectory (() => { });
+			}
+		}
+		return (this.createCommand ("CommandResult", SystemInterface.Constant.Media, {
+			success: true
+		}));
+	}
+
 	// Scan the server's media path to find new media files and create tasks as needed to gather metadata, and invoke the provided callback when complete
 	scanMediaDirectory (endCallback) {
 		if ((! this.isReady) || (this.taskWaitCount > 0) || (Object.keys (this.scanPathMap).length > 0)) {
 			process.nextTick (endCallback);
 			return;
 		}
+
+		this.isScanningMediaDirectory = true;
 		FsUtil.findAllFiles (this.configureMap.mediaPath).then ((fileList) => {
 			let targetfiles;
 
@@ -385,6 +420,8 @@ class MediaServer extends ServerBase {
 		}).catch ((err) => {
 			Log.err (`${this.toString ()} failed to update media data; err=${err}`);
 			endCallback (err);
+		}).then (() => {
+			this.isScanningMediaDirectory = false;
 		});
 	}
 

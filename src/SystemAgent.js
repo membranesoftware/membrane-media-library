@@ -1,5 +1,5 @@
 /*
-* Copyright 2018 Membrane Software <author@membranesoftware.com>
+* Copyright 2019 Membrane Software <author@membranesoftware.com>
 *                 https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
@@ -32,34 +32,36 @@
 
 "use strict";
 
-var App = global.App || { };
-var Os = require ("os");
-var Fs = require ("fs");
-var Http = require ("http");
-var Https = require ("https");
-var Crypto = require ("crypto");
-var EventEmitter = require ("events").EventEmitter;
-var Dgram = require ("dgram");
-var Url = require ("url");
-var QueryString = require ("querystring");
-var UuidV4 = require ("uuid/v4");
-var Async = require ("async");
-var Io = require ("socket.io");
-var Log = require (App.SOURCE_DIRECTORY + "/Log");
-var Result = require (App.SOURCE_DIRECTORY + "/Result");
-var FsUtil = require (App.SOURCE_DIRECTORY + "/FsUtil");
-var Ipv4Address = require (App.SOURCE_DIRECTORY + "/Ipv4Address");
-var Task = require (App.SOURCE_DIRECTORY + "/Task/Task");
-var TaskGroup = require (App.SOURCE_DIRECTORY + "/Task/TaskGroup");
-var RepeatTask = require (App.SOURCE_DIRECTORY + "/RepeatTask");
-var IntentGroup = require (App.SOURCE_DIRECTORY + "/Intent/IntentGroup");
-var SystemInterface = require (App.SOURCE_DIRECTORY + "/SystemInterface");
-var DataStore = require (App.SOURCE_DIRECTORY + "/DataStore");
-var AccessControl = require (App.SOURCE_DIRECTORY + "/AccessControl");
-var ExecProcess = require (App.SOURCE_DIRECTORY + "/ExecProcess");
-var Server = require (App.SOURCE_DIRECTORY + "/Server/Server");
+const App = global.App || { };
+const Os = require ("os");
+const Fs = require ("fs");
+const Path = require ("path");
+const Http = require ("http");
+const Https = require ("https");
+const Crypto = require ("crypto");
+const EventEmitter = require ("events").EventEmitter;
+const Dgram = require ("dgram");
+const Url = require ("url");
+const QueryString = require ("querystring");
+const UuidV4 = require ("uuid/v4");
+const Async = require ("async");
+const Io = require ("socket.io");
+const Log = require (App.SOURCE_DIRECTORY + "/Log");
+const Result = require (App.SOURCE_DIRECTORY + "/Result");
+const FsUtil = require (App.SOURCE_DIRECTORY + "/FsUtil");
+const Ipv4Address = require (App.SOURCE_DIRECTORY + "/Ipv4Address");
+const Task = require (App.SOURCE_DIRECTORY + "/Task/Task");
+const TaskGroup = require (App.SOURCE_DIRECTORY + "/Task/TaskGroup");
+const RepeatTask = require (App.SOURCE_DIRECTORY + "/RepeatTask");
+const IntentGroup = require (App.SOURCE_DIRECTORY + "/Intent/IntentGroup");
+const SystemInterface = require (App.SOURCE_DIRECTORY + "/SystemInterface");
+const DataStore = require (App.SOURCE_DIRECTORY + "/DataStore");
+const AccessControl = require (App.SOURCE_DIRECTORY + "/AccessControl");
+const ExecProcess = require (App.SOURCE_DIRECTORY + "/ExecProcess");
+const Server = require (App.SOURCE_DIRECTORY + "/Server/Server");
 
 const START_EVENT = "start";
+const STOP_EVENT = "stop";
 
 class SystemAgent {
 	constructor () {
@@ -72,6 +74,7 @@ class SystemAgent {
 		this.applicationName = "";
 		this.urlHostname = "";
 		this.platform = "";
+		this.memoryFilePath = "";
 
 		this.isStarted = false;
 		this.startTime = 0;
@@ -126,9 +129,12 @@ class SystemAgent {
 		this.runDataStoreTask = new RepeatTask ();
 		this.runDataStoreEventEmitter = new EventEmitter ();
 		this.runDataStoreEventEmitter.setMaxListeners (0);
+
+		this.agentStopEventEmitter = new EventEmitter ();
+		this.agentStopEventEmitter.setMaxListeners (0);
 	}
 
-	// Start the agent's operation and invoke the provided callback when complete, with an "err" parameter (non-null if an error occurred)
+	// Start the agent's operation and invoke startCompleteCallback (err) when complete
 	start (startCompleteCallback) {
 		let pos, server, serverconfigs;
 
@@ -235,6 +241,8 @@ class SystemAgent {
 				this.dataStore = new DataStore (App.MONGOD_PATH, this.dataPath + "/records", App.STORE_PORT);
 				return (this.dataStore.run ());
 			}
+		}).then (() => {
+			return (this.openMemoryFilePath ());
 		}).then (() => {
 			let path;
 
@@ -450,6 +458,9 @@ class SystemAgent {
 
 				io = Io.listen (http, { "path": this.linkPath });
 				io.on ("connection", ioConnection);
+				this.agentStopEventEmitter.once (STOP_EVENT, () => {
+					io.close ();
+				});
 
 				resolve ();
 			};
@@ -540,7 +551,7 @@ class SystemAgent {
 		}));
 	}
 
-	// Start all servers and invoke the provided callback when complete. If a callback is not provided, instead return a promise that resolves if the operation succeeds or rejects if it doesn't.
+	// Start all servers and invoke startCompleteCallback (err) when complete. If startCompleteCallback is not provided, instead return a promise that resolves if the operation succeeds or rejects if it doesn't.
 	startAllServers (startCompleteCallback) {
 		let execute = (executeCallback) => {
 			let startServer, state;
@@ -606,13 +617,14 @@ class SystemAgent {
 		}
 	}
 
-	// Stop the agent's operation and invoke the provided callback when complete
+	// Stop the agent's operation and invoke stopCallback when complete
 	stop (stopCallback) {
 		let stopServersComplete, writeStateComplete, stopHttp1Complete, stopHttp2Complete;
 
 		this.accessControl.stop ();
 		this.taskGroup.stop ();
 		this.intentGroup.stop ();
+		this.agentStopEventEmitter.emit (STOP_EVENT);
 
 		setTimeout (() => {
 			this.stopAllServers (stopServersComplete);
@@ -646,13 +658,13 @@ class SystemAgent {
 		};
 	}
 
-	// Stop all servers and invoke the provided callback when complete
-	stopAllServers (callback) {
+	// Stop all servers and invoke endCallback when complete
+	stopAllServers (endCallback) {
 		let stopNextServer, stopComplete, serverindex;
 
 		stopNextServer = () => {
 			if (serverindex >= this.serverList.length) {
-				callback ();
+				endCallback ();
 				return;
 			}
 
@@ -937,11 +949,11 @@ class SystemAgent {
 		}
 	}
 
-	// Run the data store process if it's not already running and invoke the provided callback when complete
-	runDataStoreProcess (callback) {
+	// Run the data store process if it's not already running and invoke runCallback when complete
+	runDataStoreProcess (runCallback) {
 		if (this.dataStore != null) {
 			if (this.dataStore.isRunning) {
-				process.nextTick (callback);
+				process.nextTick (runCallback);
 				return;
 			}
 		}
@@ -949,10 +961,10 @@ class SystemAgent {
 		this.dataStore = new DataStore (App.MONGOD_PATH, this.dataPath + "/records", App.STORE_PORT);
 		this.dataStore.run ().then (() => {
 			this.runDataStoreEventEmitter.emit (START_EVENT);
-			callback ();
+			runCallback ();
 		}).catch ((err) => {
 			Log.err (`Failed to start data store process; runPath="${App.MONGOD_PATH}" err=${err}`);
-			callback ();
+			runCallback ();
 		});
 	}
 
@@ -990,6 +1002,56 @@ class SystemAgent {
 		}));
 	}
 
+	// Return a promise that checks for an available memory filesystem and assigns the memoryFilePath data member to a non-empty value if successful
+	openMemoryFilePath () {
+		return (new Promise ((resolve, reject) => {
+			let path, statComplete, createDirectoryComplete;
+
+			if (this.platform != "linux") {
+				this.memoryFilePath = "";
+				resolve ();
+				return;
+			}
+
+			setTimeout (() => {
+				// User-specific tmpfs directory, available on Raspbian and other Linux systems
+				path = Path.join (Path.sep, "run", "user", "" + process.getuid ());
+				Fs.stat (path, statComplete);
+			}, 0);
+			statComplete = (err, stats) => {
+				if (err != null) {
+					Log.debug (`Memory file system not available; err=${err}`);
+					this.memoryFilePath = "";
+					resolve ();
+					return;
+				}
+
+				if (! stats.isDirectory ()) {
+					Log.debug (`Memory file system not available; err=${path} is not a directory`);
+					this.memoryFilePath = "";
+					resolve ();
+					return;
+				}
+
+				path = Path.join (path, "membrane-server");
+				FsUtil.createDirectory (path, createDirectoryComplete);
+			};
+
+			createDirectoryComplete = (err) => {
+				if (err != null) {
+					Log.debug (`Memory file system not available; err=${err}`);
+					this.memoryFilePath = "";
+					resolve ();
+					return;
+				}
+
+				this.memoryFilePath = path;
+				Log.debug (`Memory file system open; path=${path}`);
+				resolve ();
+			};
+		}));
+	}
+
 	// Copy fields from the provided object into the agent's run state and execute a write operation to persist the change. If endCallback is provided, invoke it when the write operation completes.
 	updateRunState (fields, endCallback) {
 		for (let i in fields) {
@@ -1002,8 +1064,8 @@ class SystemAgent {
 		FsUtil.writeStateFile (this.runStatePath, this.runState, endCallback);
 	}
 
-	// Execute actions needed to maintain the datagram socket and invoke the provided callback when complete
-	updateDatagramSocket (callback) {
+	// Execute actions needed to maintain the datagram socket and invoke endCallback when complete
+	updateDatagramSocket (endCallback) {
 		let addrmap, interfaces, addresses, item, ip, ischanged, createSocket;
 
 		addrmap = { };
@@ -1108,7 +1170,7 @@ class SystemAgent {
 			}
 		}
 
-		process.nextTick (callback);
+		process.nextTick (endCallback);
 	}
 
 	// Execute actions appropriate for a received datagram message
@@ -1350,6 +1412,23 @@ class SystemAgent {
 		return (uuid);
 	}
 
+	// Return the command type assigned to the specified UUID value, or -1 if no command type was found
+	getUuidCommand (id) {
+		let matches, cmd;
+
+		matches = id.match (/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-([0-9a-fA-F]{4})-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/);
+		if (matches == null) {
+			return (-1);
+		}
+
+		cmd = parseInt (matches[1], 16);
+		if (isNaN (cmd)) {
+			return (-1);
+		}
+
+		return (cmd);
+	}
+
 	// Return a SystemInterface command prefix object, suitable for use with the getCommandInvocation method
 	getCommandPrefix (priority, startTime, duration) {
 		let prefix;
@@ -1520,142 +1599,209 @@ class SystemAgent {
 		}
 	}
 
-	// Execute an HTTP GET operation for the provided URL and save response data into the specified path. Invokes the provided callback when complete, with parameters named "err" (non-null if an error occurred), "url" (the URL used for the invocation), and "destFile" (the path of the file that was written, or null if no file was written). A null targetFilename specifies that the fetch operation should name the file based on response data.
-	fetchUrlFile (url, targetDirectory, targetFilename, callback) {
-		let httpreq, httpres, stream, tempfilename, destfilename;
-		Fs.stat (targetDirectory, statTargetDirectoryComplete);
-		function statTargetDirectoryComplete (err, stats) {
-			if (err != null) {
-				callback (err, url, null);
-				return;
-			}
+	// Execute an HTTP GET operation for the provided URL and save response data into the specified path. Invokes endCallback (err, destFilename) when complete. If endCallback is not provided, instead return a Promise that executes the operation.
+	fetchUrlFile (url, targetDirectory, targetFilename, endCallback) {
+		let execute = (executeCallback) => {
+			let httpreq, httpres, stream, tempfilename, destfilename;
 
-			if (! stats.isDirectory ()) {
-				callback (targetDirectory + " exists but is not a directory", url, null);
-				return;
-			}
-
-			assignTempFilePath ();
-		}
-
-		function assignTempFilePath () {
-			tempfilename = targetDirectory + "/urldata_" + new Date ().getTime () + "_" + this.getRandomString (16);
-			Fs.stat (tempfilename, statTempFilePathComplete);
-		}
-
-		function statTempFilePathComplete (err, stats) {
-			if ((err != null) && (err.code != "ENOENT")) {
-				callback (err, url, null);
-				return;
-			}
-
-			if (stats != null) {
-				assignTempFilePath ();
-				return;
-			}
-
-			stream = Fs.createWriteStream (tempfilename);
-			stream.on ("open", fileOpened);
-			stream.on ("error", fileError);
-		}
-
-		function fileError (err) {
-			if (callback != null) {
+			destfilename = null;
+			Log.debug2 (`fetchUrlFile; url=${url} targetDirectory=${targetDirectory} targetFilename=${targetFilename}`);
+			Fs.stat (targetDirectory, statTargetDirectoryComplete);
+			function statTargetDirectoryComplete (err, stats) {
 				if (err != null) {
-					err = "[" + url + "] " + err;
+					executeCallback (err, null);
+					return;
 				}
 
-				callback (err, url, null);
-				callback = null;
-			}
-			stream.close ();
-		}
+				if (! stats.isDirectory ()) {
+					executeCallback (targetDirectory + " exists but is not a directory", null);
+					return;
+				}
 
-		function fileOpened () {
-			httpreq = Http.get (url, requestStarted);
+				assignTempFilePath ();
+			}
+
+			function assignTempFilePath () {
+				tempfilename = targetDirectory + "/urldata_" + new Date ().getTime () + "_" + App.systemAgent.getRandomString (16);
+				Fs.stat (tempfilename, statTempFilePathComplete);
+			}
+
+			function statTempFilePathComplete (err, stats) {
+				if ((err != null) && (err.code != "ENOENT")) {
+					executeCallback (err, null);
+					return;
+				}
+
+				if (stats != null) {
+					assignTempFilePath ();
+					return;
+				}
+				stream = Fs.createWriteStream (tempfilename);
+				stream.on ("open", fileOpened);
+				stream.once ("error", fileError);
+			}
+
+			function fileError (err) {
+				stream.close ();
+				endRequest (err);
+			}
+
+			function fileOpened () {
+				try {
+					httpreq = Http.get (url, requestStarted);
+				}
+				catch (e) {
+					endRequest (e);
+					return;
+				}
+				httpreq.on ("error", function (err) {
+					endRequest (err);
+				});
+			}
+
+			function requestStarted (res) {
+				let matchresult;
+
+				httpres = res;
+				if (httpres.statusCode != 200) {
+					endRequest ("Non-success response code " + httpres.statusCode);
+					return;
+				}
+
+				if (typeof targetFilename == "string") {
+					destfilename = Path.join (targetDirectory, targetFilename);
+				}
+
+				if (destfilename == null) {
+					val = httpres.headers["content-disposition"];
+					if (typeof val == "string") {
+						matchresult = val.match (/^attachment; filename=(.*)/);
+						if (matchresult != null) {
+							destfilename = targetDirectory + "/" + matchresult[1];
+						}
+					}
+				}
+				httpres.once ("error", function (err) {
+					endRequest (err);
+				});
+				httpres.on ("data", function (data) {
+					stream.write (data);
+				});
+				httpres.on ("end", responseComplete);
+			}
+
+			function responseComplete () {
+				stream.end ();
+				stream.once ("finish", streamFinished)
+			}
+
+			function streamFinished () {
+				endRequest (null);
+			}
+
+			function endRequest (err) {
+				if (err != null) {
+					Fs.unlink (tempfilename, function () { });
+					executeCallback (err, null);
+					return;
+				}
+
+				if (destfilename == null) {
+					// TODO: Rename the target file by parsing the last section of the URL path
+					executeCallback (null, tempfilename);
+					return;
+				}
+
+				Fs.rename (tempfilename, destfilename, renameComplete);
+			}
+
+			function renameComplete (err) {
+				if (err != null) {
+					Fs.unlink (tempfilename, function () { });
+					executeCallback (err, null);
+					return;
+				}
+
+				executeCallback (null, destfilename);
+			}
+		};
+
+		if (typeof endCallback == "function") {
+			execute (endCallback);
+		}
+		else {
+			return (new Promise ((resolve, reject) => {
+				execute ((err, destFile) => {
+					if (err != null) {
+						reject (Error (err));
+						return;
+					}
+					resolve (destFile);
+				});
+			}));
+		}
+	}
+
+	// Execute an HTTP GET operation for the provided URL and save response data into a string. Invokes endCallback (err, urlData) when complete. If endCallback is not provided, instead return a Promise that executes the operation.
+	fetchUrlData (url, endCallback) {
+		let execute = (executeCallback) => {
+			let httpreq, httpres, urldata;
+
+			urldata = "";
+			Log.debug2 (`fetchUrlData; url=${url}`);
+			try {
+				httpreq = Http.get (url, requestStarted);
+			}
+			catch (e) {
+				endRequest (e);
+				return;
+			}
 			httpreq.on ("error", function (err) {
 				endRequest (err);
 			});
+
+			function requestStarted (res) {
+				httpres = res;
+				if (httpres.statusCode != 200) {
+					endRequest ("Non-success response code " + httpres.statusCode);
+					return;
+				}
+				httpres.once ("error", function (err) {
+					endRequest (err);
+				});
+				httpres.on ("data", function (data) {
+					urldata += data.toString ();
+				});
+				httpres.on ("end", responseComplete);
+			}
+
+			function responseComplete () {
+				endRequest (null);
+			}
+
+			function endRequest (err) {
+				if (err != null) {
+					executeCallback (err, null);
+					return;
+				}
+
+				executeCallback (null, urldata);
+			}
+		};
+
+		if (typeof endCallback == "function") {
+			execute (endCallback);
 		}
-
-		function requestStarted (res) {
-			let matchresult;
-
-			httpres = res;
-			if (httpres.statusCode != 200) {
-				endRequest ("Non-success response code " + httpres.statusCode);
-				return;
-			}
-
-			destfilename = null;
-			if (targetFilename != null) {
-				destfilename = targetDirectory + "/" + targetFilename;
-			}
-
-			if (destfilename == null) {
-				val = httpres.headers["content-disposition"];
-				if (typeof val == "string") {
-					matchresult = val.match (/^attachment; filename=(.*)/);
-					if (matchresult != null) {
-						destfilename = targetDirectory + "/" + matchresult[1];
+		else {
+			return (new Promise ((resolve, reject) => {
+				execute ((err, urlData) => {
+					if (err != null) {
+						reject (Error (err));
+						return;
 					}
-				}
-			}
-
-			httpres.on ("error", function (err) {
-				endRequest (err);
-			});
-			httpres.on ("data", function (data) {
-				stream.write (data);
-			});
-			httpres.on ("end", responseComplete);
-		}
-
-		function responseComplete () {
-			stream.end ();
-			stream.once ("finish", streamFinished)
-		}
-
-		function streamFinished () {
-			endRequest (null);
-		}
-
-		function endRequest (err) {
-			if (err != null) {
-				Fs.unlink (tempfilename, function () { });
-				if (callback != null) {
-					callback (err, url, null);
-					callback = null;
-				}
-				return;
-			}
-
-			if (destfilename == null) {
-				// TODO: Rename the target file using the URL path
-				if (callback != null) {
-					callback (null, url, tempfilename);
-					callback = null;
-				}
-				return;
-			}
-
-			Fs.rename (tempfilename, destfilename, renameComplete);
-		}
-
-		function renameComplete (err) {
-			if (err != null) {
-				Fs.unlink (tempfilename, function () { });
-				if (callback != null) {
-					callback (err, url, null);
-					callback = null;
-				}
-				return;
-			}
-
-			if (callback != null) {
-				callback (null, url, destfilename);
-				callback = null;
-			}
+					resolve (urlData);
+				});
+			}));
 		}
 	}
 
@@ -1724,25 +1870,6 @@ class SystemAgent {
 
 		return (new ExecProcess (runpath, runArgs, env, workingPath, processData, processEnded));
 	}
-
-	// Return a newly created ExecProcess object that launches curl. workingPath defaults to the application data directory if empty.
-	createCurlProcess (runArgs, workingPath, processData, processEnded) {
-		let runpath, env;
-
-		runpath = App.CURL_PATH;
-		env = { };
-		if (runpath == "") {
-			if (process.platform == "win32") {
-				runpath = App.BIN_DIRECTORY + "/curl.exe";
-			}
-			else {
-				runpath = App.BIN_DIRECTORY + "/curl";
-			}
-		}
-
-		return (new ExecProcess (runpath, runArgs, env, workingPath, processData, processEnded));
-	}
-
 }
 
 module.exports = SystemAgent;

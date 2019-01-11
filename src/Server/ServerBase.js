@@ -1,5 +1,5 @@
 /*
-* Copyright 2018 Membrane Software <author@membranesoftware.com>
+* Copyright 2019 Membrane Software <author@membranesoftware.com>
 *                 https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
@@ -32,10 +32,10 @@
 
 "use strict";
 
-var App = global.App || { };
-var Result = require (App.SOURCE_DIRECTORY + "/Result");
-var Log = require (App.SOURCE_DIRECTORY + "/Log");
-var SystemInterface = require (App.SOURCE_DIRECTORY + "/SystemInterface");
+const App = global.App || { };
+const Result = require (App.SOURCE_DIRECTORY + "/Result");
+const Log = require (App.SOURCE_DIRECTORY + "/Log");
+const SystemInterface = require (App.SOURCE_DIRECTORY + "/SystemInterface");
 
 class ServerBase {
 	constructor () {
@@ -85,6 +85,11 @@ class ServerBase {
 		return (this.name.substring (0, 1).toLowerCase () + this.name.substring (1) + "Configuration");
 	}
 
+	// Return the AgentStatus field name that holds status values for servers of this type
+	getAgentStatusKey () {
+		return (this.name.substring (0, 1).toLowerCase () + this.name.substring (1) + "Status");
+	}
+
 	// Configure the server using values in the provided params object and set the isConfigured data member to reflect whether the configuration was successful
 	configure (configParams) {
 		let fields;
@@ -102,6 +107,12 @@ class ServerBase {
 		this.configureMap = fields;
 		this.deltaConfiguration = configParams;
 		this.isConfigured = true;
+		this.doConfigure ();
+	}
+
+	// Subclass method. Implementations should execute actions appropriate when the server has been successfully configured
+	doConfigure () {
+		// Default implementation does nothing
 	}
 
 	// Return an object containing configuration fields parsed from the server's base configuration combined with the provided parameters, or an error message if the parse failed
@@ -185,8 +196,7 @@ class ServerBase {
 			return;
 		}
 
-		fieldname = this.name.substring (0, 1).toLowerCase () + this.name.substring (1) + "Status";
-		fields[fieldname] = cmd.params;
+		fields[this.getAgentStatusKey ()] = cmd.params;
 	}
 
 	// Provide server configuration data by adding an appropriate field to an AgentConfiguration params object

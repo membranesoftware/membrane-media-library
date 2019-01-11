@@ -1,5 +1,5 @@
 /*
-* Copyright 2018 Membrane Software <author@membranesoftware.com>
+* Copyright 2019 Membrane Software <author@membranesoftware.com>
 *                 https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
@@ -30,24 +30,25 @@
 */
 "use strict";
 
-var App = global.App || { };
-var Util = require ("util");
-var Fs = require ("fs");
-var Path = require ("path");
-var Async = require ("async");
-var UuidV4 = require ("uuid/v4");
-var Result = require (App.SOURCE_DIRECTORY + "/Result");
-var Log = require (App.SOURCE_DIRECTORY + "/Log");
-var FsUtil = require (App.SOURCE_DIRECTORY + "/FsUtil");
-var SystemInterface = require (App.SOURCE_DIRECTORY + "/SystemInterface");
-var RepeatTask = require (App.SOURCE_DIRECTORY + "/RepeatTask");
-var Task = require (App.SOURCE_DIRECTORY + "/Task/Task");
-var ServerBase = require (App.SOURCE_DIRECTORY + "/Server/ServerBase");
+const App = global.App || { };
+const Util = require ("util");
+const Fs = require ("fs");
+const Path = require ("path");
+const Async = require ("async");
+const UuidV4 = require ("uuid/v4");
+const Result = require (App.SOURCE_DIRECTORY + "/Result");
+const Log = require (App.SOURCE_DIRECTORY + "/Log");
+const FsUtil = require (App.SOURCE_DIRECTORY + "/FsUtil");
+const SystemInterface = require (App.SOURCE_DIRECTORY + "/SystemInterface");
+const RepeatTask = require (App.SOURCE_DIRECTORY + "/RepeatTask");
+const Task = require (App.SOURCE_DIRECTORY + "/Task/Task");
+const ServerBase = require (App.SOURCE_DIRECTORY + "/Server/ServerBase");
 
 const HLS_STREAM_PATH = "/streamserver/hls/index.m3u8";
 const HLS_SEGMENT_PATH = "/streamserver/hls/segment.ts";
 const HLS_HTML5_PATH = "/streamserver/hls.html";
 const THUMBNAIL_PATH = "/streamserver/thumbnail.png";
+const GET_DISK_SPACE_PERIOD = 7 * 60 * 1000; // milliseconds
 
 class StreamServer extends ServerBase {
 	constructor () {
@@ -65,9 +66,10 @@ class StreamServer extends ServerBase {
 		];
 
 		this.isReady = false;
-		this.totalDataSpace = 0; // kilobytes
-		this.freeDataSpace = 0; // kilobytes
-		this.usedDataSpace = 0; // kilobytes
+		this.totalStorage = 0; // bytes
+		this.freeStorage = 0; // bytes
+		this.usedStorage = 0; // bytes
+		this.getDiskSpaceTask = new RepeatTask ();
 
 		// A map of stream ID values to StreamItem commands
 		this.streamMap = { };
@@ -78,9 +80,9 @@ class StreamServer extends ServerBase {
 		FsUtil.createDirectory (this.configureMap.dataPath).then (() => {
 			return (Task.executeTask ("GetDiskSpace", { targetPath: this.configureMap.dataPath }));
 		}).then ((resultObject) => {
-			this.totalDataSpace = resultObject.total;
-			this.usedDataSpace = resultObject.used;
-			this.freeDataSpace = resultObject.free;
+			this.totalStorage = resultObject.total;
+			this.usedStorage = resultObject.used;
+			this.freeStorage = resultObject.free;
 		}).then (() => {
 			App.systemAgent.addInvokeRequestHandler ("/", SystemInterface.Constant.Stream, (cmdInv) => {
 				switch (cmdInv.command) {
@@ -163,6 +165,17 @@ class StreamServer extends ServerBase {
 				this.readRecords ();
 			});
 
+			this.getDiskSpaceTask.setRepeating ((callback) => {
+				Task.executeTask ("GetDiskSpace", { targetPath: this.configureMap.dataPath }).then ((resultObject) => {
+					this.totalStorage = resultObject.total;
+					this.usedStorage = resultObject.used;
+					this.freeStorage = resultObject.free;
+					callback ();
+				}).catch ((err) => {
+					callback ();
+				});
+			}, GET_DISK_SPACE_PERIOD);
+
 			startCallback (null);
 		}).catch ((err) => {
 			startCallback (err);
@@ -171,6 +184,7 @@ class StreamServer extends ServerBase {
 
 	// Execute subclass-specific stop operations and invoke the provided callback when complete
 	doStop (stopCallback) {
+		this.getDiskSpaceTask.stop ();
 		App.systemAgent.stopDataStore ();
 		process.nextTick (stopCallback);
 	}
@@ -180,8 +194,8 @@ class StreamServer extends ServerBase {
 		return (this.createCommand ("StreamServerStatus", SystemInterface.Constant.Stream, {
 			isReady: this.isReady,
 			streamCount: Object.keys (this.streamMap).length,
-			freeSpace: this.freeDataSpace,
-			totalSpace: this.totalDataSpace,
+			freeStorage: this.freeStorage,
+			totalStorage: this.totalStorage,
 			hlsStreamPath: HLS_STREAM_PATH,
 			hlsHtml5Path: HLS_HTML5_PATH,
 			thumbnailPath: THUMBNAIL_PATH
@@ -215,7 +229,7 @@ class StreamServer extends ServerBase {
 
 	// Execute operations to verify the presence of files required for each item in the stream map
 	scanDataDirectory () {
-		let items, itemindex, removelist, scanNextItem, scanItem;
+		let items, itemindex, removelist, scanNextItem;
 		setTimeout (() => {
 			removelist = [ ];
 			items = Object.values (this.streamMap);
@@ -223,49 +237,34 @@ class StreamServer extends ServerBase {
 			scanNextItem ();
 		}, 0);
 		scanNextItem = () => {
+			let item, datapath, filenames, statFilesComplete;
+
 			++itemindex;
 			if (itemindex >= items.length) {
 				this.pruneStreamItems (removelist);
 				return;
 			}
 
-			scanItem (items[itemindex]);
-		};
-		scanItem = (streamItem) => {
-			let datapath, filenames, streamFileExists, streamFileCheckComplete;
-
-			datapath = Path.join (this.configureMap.dataPath, streamItem.params.id);
+			item = items[itemindex];
+			datapath = Path.join (this.configureMap.dataPath, item.params.id);
 			filenames = [ ];
-			filenames.push (Path.join (datapath, "hls", "index.m3u8"));
-			for (let i = 0; i < streamItem.params.segmentFilenames.length; ++i) {
-				filenames.push (Path.join (datapath, "hls", streamItem.params.segmentFilenames[i]));
-				filenames.push (Path.join (datapath, "thumbnail", streamItem.params.segmentFilenames[i] + ".jpg"));
+			filenames.push (Path.join (datapath, App.STREAM_HLS_PATH, App.STREAM_INDEX_FILENAME));
+			for (let i = 0; i < item.params.segmentFilenames.length; ++i) {
+				filenames.push (Path.join (datapath, App.STREAM_HLS_PATH, item.params.segmentFilenames[i]));
+				filenames.push (Path.join (datapath, App.STREAM_THUMBNAIL_PATH, item.params.segmentFilenames[i] + ".jpg"));
 			}
 
-			streamFileExists = (path, callback) => {
-				FsUtil.fileExists (path, (err, exists) => {
-					if (err) {
-						callback (err);
-						return;
-					}
-					if (! exists) {
-						callback ("File not found: " + path);
-						return;
-					}
-
-					callback ();
-				});
-			};
-
-			streamFileCheckComplete = (err) => {
-				if (err) {
-					removelist.push (streamItem);
+			setTimeout (() => {
+				FsUtil.statFiles (filenames, (filename, stats) => {
+					return (stats.isFile () && (stats.size > 0));
+				}, statFilesComplete);
+			}, 0);
+			statFilesComplete = (err) => {
+				if (err != null) {
+					removelist.push (item);
 				}
-
 				scanNextItem ();
 			};
-
-			Async.eachLimit (filenames, 8, streamFileExists, streamFileCheckComplete);
 		};
 	}
 
@@ -514,8 +513,8 @@ class StreamServer extends ServerBase {
 			}
 		}
 
-		if ((cmdInv.params.minStartPositionDelta > 0) || (cmdInv.params.maxStartPositionDelta > 0)) {
-			if (cmdInv.params.minStartPositionDelta <= cmdInv.params.maxStartPositionDelta) {
+		if ((typeof cmdInv.params.minStartPositionDelta == "number") && (typeof cmdInv.params.maxStartPositionDelta == "number")) {
+			if (((cmdInv.params.minStartPositionDelta > 0) || (cmdInv.params.maxStartPositionDelta > 0)) && (cmdInv.params.minStartPositionDelta <= cmdInv.params.maxStartPositionDelta)) {
 				pct = App.systemAgent.getRandomInteger (cmdInv.params.minStartPositionDelta, cmdInv.params.maxStartPositionDelta);
 				if (pct < 0) {
 					pct = 0;
@@ -566,7 +565,7 @@ class StreamServer extends ServerBase {
 			return;
 		}
 
-		path = Path.join (this.configureMap.dataPath, cmdInv.params.streamId, "hls", item.params.segmentFilenames[cmdInv.params.segmentIndex]);
+		path = Path.join (this.configureMap.dataPath, cmdInv.params.streamId, App.STREAM_HLS_PATH, item.params.segmentFilenames[cmdInv.params.segmentIndex]);
 		Fs.stat (path, (err, stats) => {
 			let stream, isopen;
 
@@ -633,7 +632,7 @@ class StreamServer extends ServerBase {
 			return;
 		}
 
-		path = Path.join (this.configureMap.dataPath, cmdInv.params.id, "thumbnail", item.params.segmentFilenames[cmdInv.params.thumbnailIndex] + ".jpg");
+		path = Path.join (this.configureMap.dataPath, cmdInv.params.id, App.STREAM_THUMBNAIL_PATH, item.params.segmentFilenames[cmdInv.params.thumbnailIndex] + ".jpg");
 		Fs.stat (path, (err, stats) => {
 			let stream, isopen;
 

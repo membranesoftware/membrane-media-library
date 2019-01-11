@@ -1,5 +1,5 @@
 /*
-* Copyright 2018 Membrane Software <author@membranesoftware.com>
+* Copyright 2019 Membrane Software <author@membranesoftware.com>
 *                 https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
@@ -32,9 +32,9 @@
 
 "use strict";
 
-var App = global.App || { };
-var Fs = require ('fs');
-var Path = require ('path');
+const App = global.App || { };
+const Fs = require ('fs');
+const Path = require ('path');
 
 exports.ERR = 0;
 exports.WARNING = 1;

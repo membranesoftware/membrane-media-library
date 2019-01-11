@@ -1,5 +1,5 @@
 /*
-* Copyright 2018 Membrane Software <author@membranesoftware.com>
+* Copyright 2019 Membrane Software <author@membranesoftware.com>
 *                 https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
@@ -32,7 +32,7 @@
 
 "use strict";
 
-var App = global.App || { };
+const App = global.App || { };
 
 // Return an item from the map, or null if the item wasn't found. If createFn is a function that returns an object, a new item is created instead.
 function getItem (map, key, createFn) {

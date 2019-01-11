@@ -1,5 +1,5 @@
 /*
-* Copyright 2018 Membrane Software <author@membranesoftware.com>
+* Copyright 2019 Membrane Software <author@membranesoftware.com>
 *                 https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
@@ -32,12 +32,12 @@
 
 "use strict";
 
-var App = require ("./App");
-var Log = require (App.SOURCE_DIRECTORY + "/Log");
-var Result = require (App.SOURCE_DIRECTORY + "/Result");
-var FsUtil = require (App.SOURCE_DIRECTORY + "/FsUtil");
-var SystemAgent = require (App.SOURCE_DIRECTORY + "/SystemAgent");
-var SystemInterface = require (App.SOURCE_DIRECTORY + "/SystemInterface");
+const App = require ("./App");
+const Log = require (App.SOURCE_DIRECTORY + "/Log");
+const Result = require (App.SOURCE_DIRECTORY + "/Result");
+const FsUtil = require (App.SOURCE_DIRECTORY + "/FsUtil");
+const SystemAgent = require (App.SOURCE_DIRECTORY + "/SystemAgent");
+const SystemInterface = require (App.SOURCE_DIRECTORY + "/SystemInterface");
 
 process.setMaxListeners (0);
 
@@ -157,13 +157,6 @@ let configParams = [
 		defaultValue: ""
 	},
 	{
-		name: "CurlPath",
-		type: "string",
-		flags: SystemInterface.ParamFlag.Required,
-		description: "The path for the curl executable. An empty value specifies that the agent's included curl binary should be used.",
-		defaultValue: ""
-	},
-	{
 		name: "MongodPath",
 		type: "string",
 		flags: SystemInterface.ParamFlag.Required,
@@ -255,7 +248,6 @@ if (conf != null) {
 	App.AUTHORIZE_SESSION_DURATION = fields.AuthorizeSessionDuration * 1000;
 	App.MAX_TASK_COUNT = fields.MaxTaskCount;
 	App.FFMPEG_PATH = fields.FfmpegPath;
-	App.CURL_PATH = fields.CurlPath;
 	App.MONGOD_PATH = fields.MongodPath;
 	App.STORE_PORT = fields.StorePort;
 	App.STORE_DATABASE = fields.StoreDatabase;

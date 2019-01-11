@@ -1,5 +1,5 @@
 /*
-* Copyright 2018 Membrane Software <author@membranesoftware.com>
+* Copyright 2019 Membrane Software <author@membranesoftware.com>
 *                 https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
@@ -32,11 +32,12 @@
 
 "use strict";
 
-var App = global.App || { };
-var Fs = require ("fs");
-var Path = require ("path");
-var Os = require ("os");
-var Log = require (App.SOURCE_DIRECTORY + "/Log");
+const App = global.App || { };
+const Fs = require ("fs");
+const Path = require ("path");
+const Os = require ("os");
+const Async = require ("async");
+const Log = require (App.SOURCE_DIRECTORY + "/Log");
 
 const FS_READ_BLOCK_SIZE = 65536; // bytes
 
@@ -263,6 +264,54 @@ exports.statFile = function (path, endCallback) {
 					return;
 				}
 				resolve (stats);
+			});
+		}));
+	}
+};
+
+// Gather stats for all files in fileList and invoke endCallback (err) when complete. If statFunction is provided, invoke statFunction (filename, stats) for each file and generate an error if statFunction does not return true. If endCallback is not provided, instead return a promise that resolves if the operation succeeds or rejects if it doesn't.
+exports.statFiles = function (fileList, statFunction, endCallback) {
+	let execute = (executeCallback) => {
+		let statFile, statFilesComplete;
+
+		statFile = (file, callback) => {
+			Fs.stat (file, (err, stats) => {
+				if (err != null) {
+					callback (err);
+					return;
+				}
+				if ((typeof statFunction == "function") && (statFunction (file, stats) !== true)) {
+					callback ("File failed validation check");
+					return;
+				}
+
+				callback ();
+			});
+		};
+
+		statFilesComplete = (err) => {
+			if (err != null) {
+				executeCallback (err);
+				return;
+			}
+
+			executeCallback ();
+		};
+
+		Async.eachLimit (fileList, 8, statFile, statFilesComplete);
+	};
+
+	if (typeof endCallback == "function") {
+		execute (endCallback);
+	}
+	else {
+		return (new Promise ((resolve, reject) => {
+			execute ((err) => {
+				if (err != null) {
+					reject (Error (err));
+					return;
+				}
+				resolve ();
 			});
 		}));
 	}

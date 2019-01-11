@@ -3,7 +3,7 @@
 var App = global.App || { };
 var ExecProcess = require (App.SOURCE_DIRECTORY + "/ExecProcess");
 
-// Return a promise that executes the operation. If successful, the promise resolves with number fields "total", "used", and "free", specified in kilobytes.
+// Return a promise that executes the operation. If successful, the promise resolves with number fields "total", "used", and "free", specified in bytes.
 module.exports = function (task) {
 	return (new Promise ((resolve, reject) => {
 		let proc, found, total, used, free;
@@ -22,9 +22,9 @@ module.exports = function (task) {
 				}
 				m = line.match (/^(.*?)\s+([0-9]+)\s+([0-9]+)\s+([0-9]+)/);
 				if (m != null) {
-					total = parseInt (m[2], 10);
-					used = parseInt (m[3], 10);
-					free = parseInt (m[4], 10);
+					total = parseInt (m[2], 10) * 1024;
+					used = parseInt (m[3], 10) * 1024;
+					free = parseInt (m[4], 10) * 1024;
 					found = true;
 				}
 			}

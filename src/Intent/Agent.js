@@ -1,5 +1,5 @@
 /*
-* Copyright 2018 Membrane Software <author@membranesoftware.com>
+* Copyright 2019 Membrane Software <author@membranesoftware.com>
 *                 https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
@@ -32,10 +32,10 @@
 
 "use strict";
 
-var App = global.App || { };
-var Util = require ("util");
-var Log = require (App.SOURCE_DIRECTORY + "/Log");
-var SystemInterface = require (App.SOURCE_DIRECTORY + "/SystemInterface");
+const App = global.App || { };
+const Util = require ("util");
+const Log = require (App.SOURCE_DIRECTORY + "/Log");
+const SystemInterface = require (App.SOURCE_DIRECTORY + "/SystemInterface");
 
 class Agent {
 	constructor () {

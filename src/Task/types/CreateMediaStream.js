@@ -1,5 +1,5 @@
 /*
-* Copyright 2018 Membrane Software <author@membranesoftware.com>
+* Copyright 2019 Membrane Software <author@membranesoftware.com>
 *                 https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
@@ -30,15 +30,15 @@
 */
 "use strict";
 
-var App = global.App || { };
-var Fs = require ("fs");
-var Path = require ("path");
-var Log = require (App.SOURCE_DIRECTORY + "/Log");
-var SystemInterface = require (App.SOURCE_DIRECTORY + "/SystemInterface");
-var FsUtil = require (App.SOURCE_DIRECTORY + "/FsUtil");
-var TranscodeOutputParser = require (App.SOURCE_DIRECTORY + "/Common/TranscodeOutputParser");
-var HlsIndexParser = require (App.SOURCE_DIRECTORY + "/Common/HlsIndexParser");
-var TaskBase = require (App.SOURCE_DIRECTORY + "/Task/TaskBase");
+const App = global.App || { };
+const Fs = require ("fs");
+const Path = require ("path");
+const Log = require (App.SOURCE_DIRECTORY + "/Log");
+const SystemInterface = require (App.SOURCE_DIRECTORY + "/SystemInterface");
+const FsUtil = require (App.SOURCE_DIRECTORY + "/FsUtil");
+const TranscodeOutputParser = require (App.SOURCE_DIRECTORY + "/Common/TranscodeOutputParser");
+const HlsIndexParser = require (App.SOURCE_DIRECTORY + "/Common/HlsIndexParser");
+const TaskBase = require (App.SOURCE_DIRECTORY + "/Task/TaskBase");
 
 class CreateMediaStream extends TaskBase {
 	constructor () {
@@ -100,6 +100,7 @@ class CreateMediaStream extends TaskBase {
 		this.sourceMetadata = { };
 		this.destMetadata = { };
 		this.hlsMetadata = { };
+		this.streamSize = 0;
 	}
 
 	// Subclass method. Implementations should execute actions appropriate when the task has been successfully configured
@@ -124,7 +125,7 @@ class CreateMediaStream extends TaskBase {
 
 			return (FsUtil.createDirectory (this.streamDataPath));
 		}).then (() => {
-			return (FsUtil.createDirectory (Path.join (this.streamDataPath, "hls")));
+			return (FsUtil.createDirectory (Path.join (this.streamDataPath, App.STREAM_HLS_PATH)));
 		}).then (() => {
 			return (this.readSourceMetadata ());
 		}).then (() => {
@@ -135,6 +136,8 @@ class CreateMediaStream extends TaskBase {
 		}).then (() => {
 			return (this.readHlsMetadata ());
 		}).then (() => {
+			return (this.computeStreamSize ());
+		}).then (() => {
 			let params, streamitem;
 
 			params = {
@@ -144,6 +147,7 @@ class CreateMediaStream extends TaskBase {
 				duration: this.destMetadata.duration,
 				width: this.destMetadata.width,
 				height: this.destMetadata.height,
+				size: this.streamSize,
 				bitrate: this.destMetadata.bitrate,
 				frameRate: this.destMetadata.frameRate,
 				hlsTargetDuration: this.hlsMetadata.hlsTargetDuration,
@@ -254,7 +258,7 @@ class CreateMediaStream extends TaskBase {
 			runargs.push ("-map"); runargs.push (metadata.audioStreamId);
 
 			runargs.push ("-f"); runargs.push ("ssegment");
-			runargs.push ("-segment_list"); runargs.push ("index.m3u8");
+			runargs.push ("-segment_list"); runargs.push (App.STREAM_INDEX_FILENAME);
 			runargs.push ("-segment_list_flags"); runargs.push ("live");
 			runargs.push ("-segment_time"); runargs.push ("2");
 			runargs.push ("%05d.ts");
@@ -262,7 +266,7 @@ class CreateMediaStream extends TaskBase {
 			this.destMetadata = metadata;
 
 			setTimeout (() => {
-				proc = App.systemAgent.createFfmpegProcess (runargs, Path.join (this.streamDataPath, "hls"), processData, processEnded);
+				proc = App.systemAgent.createFfmpegProcess (runargs, Path.join (this.streamDataPath, App.STREAM_HLS_PATH), processData, processEnded);
 			}, 0);
 
 			processData = (lines, dataParseCallback) => {
@@ -291,7 +295,7 @@ class CreateMediaStream extends TaskBase {
 		return (new Promise ((resolve, reject) => {
 			let segmentfiles, segmentindex, proc, createNextThumbnail, processEnded;
 
-			FsUtil.readDirectory (Path.join (this.streamDataPath, "hls")).then ((files) => {
+			FsUtil.readDirectory (Path.join (this.streamDataPath, App.STREAM_HLS_PATH)).then ((files) => {
 				segmentfiles = [ ];
 				for (let file of files) {
 					if (file.match (/^[0-9]+\.ts$/)) {
@@ -300,7 +304,7 @@ class CreateMediaStream extends TaskBase {
 				}
 				segmentfiles.sort ();
 
-				return (FsUtil.createDirectory (Path.join (this.streamDataPath, "thumbnail")));
+				return (FsUtil.createDirectory (Path.join (this.streamDataPath, App.STREAM_THUMBNAIL_PATH)));
 			}).then (() => {
 				segmentindex = -1;
 				createNextThumbnail ();
@@ -316,13 +320,13 @@ class CreateMediaStream extends TaskBase {
 				}
 
 				proc = App.systemAgent.createFfmpegProcess ([
-					"-i", Path.join (this.streamDataPath, "hls", segmentfiles[segmentindex]),
+					"-i", Path.join (this.streamDataPath, App.STREAM_HLS_PATH, segmentfiles[segmentindex]),
 					"-vcodec", "mjpeg",
 					"-vframes", "1",
 					"-an",
 					"-y",
-					Path.join (this.streamDataPath, "thumbnail", segmentfiles[segmentindex] + ".jpg"),
-				], Path.join (this.streamDataPath, "hls"), null, processEnded);
+					Path.join (this.streamDataPath, App.STREAM_THUMBNAIL_PATH, segmentfiles[segmentindex] + ".jpg"),
+				], Path.join (this.streamDataPath, App.STREAM_HLS_PATH), null, processEnded);
 			};
 
 			processEnded = () => {
@@ -342,7 +346,7 @@ class CreateMediaStream extends TaskBase {
 	// Return a promise that reads metadata from the HLS transcode output and stores the resulting object in this.hlsMetadata
 	readHlsMetadata () {
 		return (new Promise ((resolve, reject) => {
-			Fs.readFile (Path.join (this.streamDataPath, "hls", "index.m3u8"), (err, data) => {
+			Fs.readFile (Path.join (this.streamDataPath, App.STREAM_HLS_PATH, App.STREAM_INDEX_FILENAME), (err, data) => {
 				let metadata;
 
 				if (err != null) {
@@ -359,6 +363,41 @@ class CreateMediaStream extends TaskBase {
 				this.hlsMetadata = metadata;
 				resolve ();
 			});
+		}));
+	}
+
+	// Return a promise that determines the total size of all generated stream files and stores the result in this.streamSize
+	computeStreamSize () {
+		return (new Promise ((resolve, reject) => {
+			let streamsize, files, fileindex, statNextFile, statFileComplete;
+
+			FsUtil.findAllFiles (this.streamDataPath).then ((directoryFiles) => {
+				streamsize = 0;
+				files = directoryFiles;
+				fileindex = -1;
+				statNextFile ();
+			}).catch ((err) => {
+				reject (err);
+			});
+
+			statNextFile = () => {
+				++fileindex;
+				if (fileindex >= files.length) {
+					this.streamSize = streamsize;
+					resolve ();
+					return;
+				}
+				FsUtil.statFile (files[fileindex], statFileComplete);
+			};
+
+			statFileComplete = (err, stats) => {
+				if (err != null) {
+					reject (Error (err));
+					return;
+				}
+				streamsize += stats.size;
+				statNextFile ();
+			};
 		}));
 	}
 
