@@ -172,16 +172,15 @@ class AccessControl {
 		return (token);
 	}
 
-	// Set the sustained state for the session referenced in the provided command's prefix. If enabled, the session does not expire by timeout.
-	setSessionSustained (cmdInv, isSustained) {
-		let key, session;
+	// Set the sustained state for the session referenced by the provided token. If enabled, the session does not expire by timeout.
+	setSessionSustained (sessionToken, isSustained) {
+		let session;
 
-		key = cmdInv.prefix[SystemInterface.Constant.AuthorizationTokenPrefixField];
-		if (typeof key != "string") {
+		if (typeof sessionToken != "string") {
 			return;
 		}
 
-		session = this.sessionMap[key];
+		session = this.sessionMap[sessionToken];
 		if (session == null) {
 			return;
 		}

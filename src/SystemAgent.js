@@ -73,7 +73,6 @@ class SystemAgent {
 		this.displayName = "";
 		this.applicationName = "";
 		this.urlHostname = "";
-		this.platform = "";
 		this.memoryFilePath = "";
 
 		this.isStarted = false;
@@ -117,6 +116,7 @@ class SystemAgent {
 		this.runState = { };
 
 		this.accessControl = new AccessControl ();
+		this.authorizePath = "";
 
 		this.taskGroup = new TaskGroup ();
 		this.taskGroup.maxRunCount = App.MAX_TASK_COUNT;
@@ -157,17 +157,6 @@ class SystemAgent {
 			if (pos > 0) {
 				this.displayName = this.displayName.substring (0, pos);
 			}
-		}
-
-		if (process.platform == "win32") {
-			// TODO: Possibly set this.platform to "win64" if appropriate
-			this.platform = "win32";
-		}
-		else if (process.platform == "darwin") {
-			this.platform = "macos";
-		}
-		else if (process.platform == "linux") {
-			this.platform = "linux";
 		}
 
 		serverconfigs = FsUtil.readConfigFile ("conf/server.conf");
@@ -224,12 +213,32 @@ class SystemAgent {
 				}
 			}
 		}).then (() => {
+			return (this.generateTlsConfig ());
+		}).then (() => {
 			if (this.isEnabled) {
 				return (this.startAllServers ());
 			}
 		}).then (() => {
 			return (this.startMainHttpServer ());
 		}).then (() => {
+			let digest, len;
+
+			if ((typeof this.runState.adminSecret == "string") && (this.runState.adminSecret != "")) {
+				digest = this.runState.adminSecret;
+				len = digest.length / 2;
+				if (len <= 0) {
+					App.AUTHORIZE_SECRET = digest;
+					this.setAuthInvokeRequestHandler (SystemInterface.Constant.DefaultAuthorizePath);
+				}
+				else {
+					App.AUTHORIZE_SECRET = digest.substring (0, len);
+					this.setAuthInvokeRequestHandler (digest.substring (len));
+				}
+			}
+			else {
+				this.setAuthInvokeRequestHandler (App.AUTHORIZE_PATH);
+			}
+
 			this.accessControl.start ();
 			this.taskGroup.start ();
 			this.intentGroup.start ();
@@ -244,20 +253,6 @@ class SystemAgent {
 		}).then (() => {
 			return (this.openMemoryFilePath ());
 		}).then (() => {
-			let path;
-
-			path = App.AUTHORIZE_PATH;
-			if (path.indexOf ("/") != 0) {
-				path = "/" + path;
-			}
-			this.addInvokeRequestHandler (path, SystemInterface.Constant.DefaultCommandType, (cmdInv) => {
-				switch (cmdInv.command) {
-					case SystemInterface.CommandId.Authorize: {
-						return (this.accessControl.authorize (cmdInv));
-					}
-				}
-			});
-
 			this.addInvokeRequestHandler (SystemInterface.Constant.DefaultInvokePath, SystemInterface.Constant.DefaultCommandType, (cmdInv) => {
 				switch (cmdInv.command) {
 					case SystemInterface.CommandId.GetStatus: {
@@ -328,6 +323,36 @@ class SystemAgent {
 							success: true
 						}));
 					}
+					case SystemInterface.CommandId.SetAdminSecret: {
+						let hash, digest, len;
+
+						if (cmdInv.params.secret == "") {
+							Log.info ("Clear admin secret by remote command");
+							this.setAuthInvokeRequestHandler (App.AUTHORIZE_PATH);
+							App.AUTHORIZE_SECRET = "";
+							this.updateRunState ({ adminSecret: "" });
+						}
+						else {
+							Log.info ("Reset admin secret by remote command");
+
+							hash = Crypto.createHash (SystemInterface.Constant.AuthorizationHashAlgorithm);
+							hash.update (cmdInv.params.secret);
+							digest = hash.digest ("hex");
+							len = digest.length / 2;
+							if (len <= 0) {
+								App.AUTHORIZE_SECRET = digest;
+								this.setAuthInvokeRequestHandler (SystemInterface.Constant.DefaultAuthorizePath);
+							}
+							else {
+								App.AUTHORIZE_SECRET = digest.substring (0, len);
+								this.setAuthInvokeRequestHandler (digest.substring (len));
+							}
+							this.updateRunState ({ adminSecret: digest });
+						}
+						return (SystemInterface.createCommand (this.getCommandPrefix (), "CommandResult", SystemInterface.Constant.DefaultCommandType, {
+							success: true
+						}));
+					}
 					case SystemInterface.CommandId.StartServers: {
 						Log.notice ("Start all servers by remote command");
 						this.startAllServers (() => { });
@@ -387,6 +412,73 @@ class SystemAgent {
 		});
 	}
 
+	// Return a promise that generates TLS configuration files if needed
+	generateTlsConfig () {
+		return (new Promise ((resolve, reject) => {
+			let filenames, proc, argslist, statFilesComplete, execOpenssl, execComplete;
+
+			setTimeout (() => {
+				filenames = [
+					Path.join (App.DATA_DIRECTORY, App.TLS_KEY_FILENAME),
+					Path.join (App.DATA_DIRECTORY, App.TLS_CERT_FILENAME)
+				];
+				FsUtil.statFiles (filenames, (filename, stats) => {
+					return (stats.isFile () && (stats.size > 0));
+				}, statFilesComplete);
+			}, 0);
+
+			statFilesComplete = (err) => {
+				if (err == null) {
+					resolve ();
+					return;
+				}
+				argslist = [
+					[
+						"genrsa",
+						"-out", Path.join (App.DATA_DIRECTORY, App.TLS_KEY_FILENAME),
+						"2048"
+					],
+					[
+						"req",
+						"-config", Path.join (App.BIN_DIRECTORY, App.OPENSSL_CONFIG_FILENAME),
+						"-batch",
+						"-new",
+						"-sha256",
+						"-key", Path.join (App.DATA_DIRECTORY, App.TLS_KEY_FILENAME),
+						"-out", Path.join (App.DATA_DIRECTORY, App.TLS_CSR_FILENAME)
+					],
+					[
+						"x509",
+						"-req",
+						"-days", "9125",
+						"-in", Path.join (App.DATA_DIRECTORY, App.TLS_CSR_FILENAME),
+						"-signkey", Path.join (App.DATA_DIRECTORY, App.TLS_KEY_FILENAME),
+						"-out", Path.join (App.DATA_DIRECTORY, App.TLS_CERT_FILENAME)
+					]
+				];
+				Async.eachSeries (argslist, execOpenssl, execComplete);
+			};
+			execOpenssl = (args, callback) => {
+				proc = App.systemAgent.createOpensslProcess (args, App.DATA_DIRECTORY, null, () => {
+					if (proc.hasError) {
+						callback ("Failed to generate TLS configuration (openssl process failed)");
+						return;
+					}
+
+					callback ();
+				});
+			};
+			execComplete = (err) => {
+				if (err != null) {
+					reject (Error (err));
+					return;
+				}
+
+				resolve ();
+			};
+		}));
+	}
+
 	// Return a promise that starts the main HTTP server if it isn't already running
 	startMainHttpServer () {
 		return (new Promise ((resolve, reject) => {
@@ -401,8 +493,8 @@ class SystemAgent {
 			if (App.ENABLE_HTTPS) {
 				try {
 					options = {
-						key: Fs.readFileSync ("conf/tls-key.pem"),
-						cert: Fs.readFileSync ("conf/tls-cert.pem")
+						key: Fs.readFileSync (Path.join (App.DATA_DIRECTORY, App.TLS_KEY_FILENAME)),
+						cert: Fs.readFileSync (Path.join (App.DATA_DIRECTORY, App.TLS_CERT_FILENAME))
 					};
 				}
 				catch (e) {
@@ -466,21 +558,44 @@ class SystemAgent {
 			};
 
 			ioConnection = (client) => {
-				let clientaddress;
+				let clientaddress, token;
 
 				clientaddress = client.request.connection.remoteAddress;
+				token = "";
 				Log.debug (`WebSocket client connected; address="${clientaddress}"`);
 
-				client.on ("disconnect", () => {
+				client.setMaxListeners (0);
+				client.once ("disconnect", () => {
 					Log.debug (`WebSocket client disconnected; address="${clientaddress}"`);
+					if (token != "") {
+						this.accessControl.setSessionSustained (token, false);
+						token = "";
+					}
 				});
 
 				client.on (SystemInterface.Constant.WebSocketEvent, (cmdInv) => {
-					let err, fn;
+					let err, fn, respcmd;
 
 					err = SystemInterface.parseCommand (cmdInv);
 					if (SystemInterface.isError (err)) {
 						Log.debug (`Discard WebSocket command; address=${clientaddress} cmdInv=${JSON.stringify (cmdInv)} err=${err}`);
+						return;
+					}
+
+					if ((App.AUTHORIZE_SECRET != "") && (cmdInv.command == SystemInterface.CommandId.Authorize)) {
+						respcmd = this.accessControl.authorize (cmdInv);
+						if (respcmd.command == SystemInterface.CommandId.AuthorizeResult) {
+							if (token != "") {
+								this.accessControl.setSessionSustained (token, false);
+							}
+							token = respcmd.params.token;
+							this.accessControl.setSessionSustained (token, true);
+							client.emit (SystemInterface.Constant.WebSocketEvent, respcmd);
+							client.emit (SystemInterface.Constant.WebSocketEvent, this.createCommand ("LinkSuccess", SystemInterface.Constant.DefaultCommandType));
+						}
+						else {
+							client.emit (SystemInterface.Constant.WebSocketEvent, this.createCommand ("AuthorizationRequired", SystemInterface.Constant.DefaultCommandType));
+						}
 						return;
 					}
 
@@ -496,6 +611,13 @@ class SystemAgent {
 						fn (client, cmdInv);
 					}
 				});
+
+				if (App.AUTHORIZE_SECRET != "") {
+					client.emit (SystemInterface.Constant.WebSocketEvent, this.createCommand ("AuthorizationRequired", SystemInterface.Constant.DefaultCommandType));
+				}
+				else {
+					client.emit (SystemInterface.Constant.WebSocketEvent, this.createCommand ("LinkSuccess", SystemInterface.Constant.DefaultCommandType));
+				}
 			};
 		}));
 	}
@@ -909,9 +1031,32 @@ class SystemAgent {
 		this.mainRequestHandlerMap[path] = handler;
 	}
 
+	// Set an invocation handler for the specified authorize path
+	setAuthInvokeRequestHandler (path) {
+		if (this.authorizePath != "") {
+			this.removeInvokeRequestHandler (this.authorizePath, SystemInterface.Constant.DefaultCommandType);
+		}
+		this.authorizePath = path;
+		if (this.authorizePath.indexOf ("/") != 0) {
+			this.authorizePath = "/" + this.authorizePath;
+		}
+		this.addInvokeRequestHandler (this.authorizePath, SystemInterface.Constant.DefaultCommandType, (cmdInv) => {
+			switch (cmdInv.command) {
+				case SystemInterface.CommandId.Authorize: {
+					return (this.accessControl.authorize (cmdInv));
+				}
+			}
+		});
+	}
+
 	// Set an invocation handler for the specified path and command type. If a matching request is received, the handler function is invoked with a "cmdInv" parameter (a SystemInterface command invocation object). The handler function is expected to return a command invocation object to be included in a response to the caller, or null if no such invocation is needed.
 	addInvokeRequestHandler (path, commandType, handler) {
 		this.invokeRequestHandlerMap[commandType + ":" + path] = handler;
+	}
+
+	// Remove a previously added invocation handler
+	removeInvokeRequestHandler (path, commandType) {
+		delete (this.invokeRequestHandlerMap[commandType + ":" + path]);
 	}
 
 	// Set a request handler for the specified path. If a request with this path is received on the secondary HTTP server, the handler function is invoked with "request" and "response" objects.
@@ -1007,7 +1152,7 @@ class SystemAgent {
 		return (new Promise ((resolve, reject) => {
 			let path, statComplete, createDirectoryComplete;
 
-			if (this.platform != "linux") {
+			if (process.platform != "linux") {
 				this.memoryFilePath = "";
 				resolve ();
 				return;
@@ -1322,7 +1467,7 @@ class SystemAgent {
 			uptime: Log.getDurationString (new Date ().getTime () - this.startTime),
 			version: App.VERSION,
 			nodeVersion: process.version,
-			platform: this.platform,
+			platform: App.AGENT_PLATFORM,
 			isEnabled: this.isEnabled,
 			taskCount: this.taskGroup.getTaskCount (),
 			runCount: this.taskGroup.getRunCount (),
@@ -1488,7 +1633,7 @@ class SystemAgent {
 			return (null);
 		}
 
-		if ((typeof authorizeSecret == "string") || (typeof authorizeToken == "string")) {
+		if ((typeof authorizeSecret == "string") && (authorizeSecret != "")) {
 			this.setCommandAuthorization (cmd, authorizeSecret, authorizeToken);
 		}
 
@@ -1837,18 +1982,6 @@ class SystemAgent {
 		return (delay);
 	}
 
-	// Return a string containing the provided path value with the agent bin path prepended if it doesn't already contain a base path
-	getRunPath (path) {
-		let runpath;
-
-		runpath = path;
-		if (runpath.indexOf ("/") !== 0) {
-			runpath = App.BIN_DIRECTORY + "/" + runpath;
-		}
-
-		return (runpath);
-	}
-
 	// Return a newly created ExecProcess object that launches ffmpeg. workingPath defaults to the application data directory if empty.
 	createFfmpegProcess (runArgs, workingPath, processData, processEnded) {
 		let runpath, env;
@@ -1865,6 +1998,27 @@ class SystemAgent {
 			}
 			else {
 				runpath = "ffmpeg";
+			}
+		}
+
+		return (new ExecProcess (runpath, runArgs, env, workingPath, processData, processEnded));
+	}
+
+	createOpensslProcess (runArgs, workingPath, processData, processEnded) {
+		let runpath, env;
+
+		runpath = App.OPENSSL_PATH;
+		env = { };
+		if (runpath == "") {
+			if (process.platform == "win32") {
+				runpath = "openssl.exe";
+			}
+			else if (process.platform == "linux") {
+				runpath = "openssl/bin/openssl";
+				env.LD_LIBRARY_PATH = App.BIN_DIRECTORY + "/openssl/lib";
+			}
+			else {
+				runpath = "openssl";
 			}
 		}
 

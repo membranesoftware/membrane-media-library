@@ -157,6 +157,13 @@ let configParams = [
 		defaultValue: ""
 	},
 	{
+		name: "OpensslPath",
+		type: "string",
+		flags: SystemInterface.ParamFlag.Required,
+		description: "The path for the openssl executable. An empty value specifies that the agent's included openssl binary should be used.",
+		defaultValue: ""
+	},
+	{
 		name: "MongodPath",
 		type: "string",
 		flags: SystemInterface.ParamFlag.Required,
@@ -248,6 +255,7 @@ if (conf != null) {
 	App.AUTHORIZE_SESSION_DURATION = fields.AuthorizeSessionDuration * 1000;
 	App.MAX_TASK_COUNT = fields.MaxTaskCount;
 	App.FFMPEG_PATH = fields.FfmpegPath;
+	App.OPENSSL_PATH = fields.OpensslPath;
 	App.MONGOD_PATH = fields.MongodPath;
 	App.STORE_PORT = fields.StorePort;
 	App.STORE_DATABASE = fields.StoreDatabase;

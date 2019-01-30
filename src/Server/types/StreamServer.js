@@ -379,7 +379,7 @@ class StreamServer extends ServerBase {
 
 	// Execute a CreateMediaStream command and return a command invocation result
 	createMediaStream (cmdInv) {
-		let mediapath, mediaserver, mediaitem, streamid, task;
+		let mediapath, mediaserver, mediaitem, streamid, params, task;
 
 		mediapath = "";
 		if (cmdInv.params.mediaServerAgentId == App.systemAgent.agentId) {
@@ -402,13 +402,21 @@ class StreamServer extends ServerBase {
 		}
 
 		streamid = App.systemAgent.getUuid (SystemInterface.CommandId.StreamItem);
-		task = Task.createTask ("CreateMediaStream", {
+		params = {
 			streamId: streamid,
 			streamName: cmdInv.params.name,
 			mediaId: cmdInv.params.mediaId,
 			mediaPath: mediapath,
 			dataPath: this.configureMap.dataPath
-		});
+		};
+		if (typeof cmdInv.params.h264Preset == "string") {
+			params.h264Preset = cmdInv.params.h264Preset;
+		}
+		if ((typeof cmdInv.params.width == "number") && (typeof cmdInv.params.height == "number")) {
+			params.width = cmdInv.params.width;
+			params.height = cmdInv.params.height;
+		}
+		task = Task.createTask ("CreateMediaStream", params);
 		if (task == null) {
 			return (this.createCommand ("CommandResult", SystemInterface.Constant.Stream, {
 				success: false,

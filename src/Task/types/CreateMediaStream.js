@@ -92,6 +92,25 @@ class CreateMediaStream extends TaskBase {
 				flags: SystemInterface.ParamFlag.Required,
 				description: "The video codec to use for the transcode operation, or an empty value to choose a default codec",
 				defaultValue: ""
+			},
+			{
+				name: "width",
+				type: "number",
+				flags: SystemInterface.ParamFlag.GreaterThanZero,
+				description: "The frame width of the stream to create, if different from the original"
+			},
+			{
+				name: "height",
+				type: "number",
+				flags: SystemInterface.ParamFlag.GreaterThanZero,
+				description: "The frame height of the stream to create, if different from the original"
+			},
+			{
+				name: "h264Preset",
+				type: "string",
+				flags: SystemInterface.ParamFlag.EnumValue,
+				enumValues: [ "ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow" ],
+				description: "The preset value that should be applied for H.264 video encoding"
 			}
 		];
 
@@ -100,7 +119,6 @@ class CreateMediaStream extends TaskBase {
 		this.sourceMetadata = { };
 		this.destMetadata = { };
 		this.hlsMetadata = { };
-		this.streamSize = 0;
 	}
 
 	// Subclass method. Implementations should execute actions appropriate when the task has been successfully configured
@@ -132,12 +150,20 @@ class CreateMediaStream extends TaskBase {
 			this.addPercentComplete (1);
 			return (this.transcodeMedia ());
 		}).then (() => {
+			return (this.computeStreamSize ());
+		}).then ((streamSize) => {
+			if ((typeof this.destMetadata.duration == "number") && (this.destMetadata.duration >= 1)) {
+				this.destMetadata.bitrate = streamSize / (this.destMetadata.duration / 1000);
+			}
+			else {
+				this.destMetadata.bitrate = streamSize;
+			}
 			return (this.createThumbnails ());
 		}).then (() => {
 			return (this.readHlsMetadata ());
 		}).then (() => {
 			return (this.computeStreamSize ());
-		}).then (() => {
+		}).then ((streamSize) => {
 			let params, streamitem;
 
 			params = {
@@ -147,7 +173,7 @@ class CreateMediaStream extends TaskBase {
 				duration: this.destMetadata.duration,
 				width: this.destMetadata.width,
 				height: this.destMetadata.height,
-				size: this.streamSize,
+				size: streamSize,
 				bitrate: this.destMetadata.bitrate,
 				frameRate: this.destMetadata.frameRate,
 				hlsTargetDuration: this.hlsMetadata.hlsTargetDuration,
@@ -204,7 +230,7 @@ class CreateMediaStream extends TaskBase {
 					return;
 				}
 
-				if ((metadata.width <= 0) || (metadata.height <= 0) || (metadata.bitrate <= 0) || (metadata.frameRate <= 0)) {
+				if ((metadata.width <= 0) || (metadata.height <= 0) || (metadata.bitrate <= 0) || (metadata.frameRate <= 0) || (metadata.duration <= 0)) {
 					reject (Error ("Media parse failed, stream details not available"));
 					return;
 				}
@@ -215,7 +241,7 @@ class CreateMediaStream extends TaskBase {
 		}));
 	}
 
-	// Return a promise that executes the media transcode
+	// Return a promise that executes the media transcode operation
 	transcodeMedia () {
 		return (new Promise ((resolve, reject) => {
 			let metadata, runargs, vcodec, proc, processData, processEnded;
@@ -226,7 +252,7 @@ class CreateMediaStream extends TaskBase {
 			}
 
 			runargs = [ ];
-			runargs.push ("-i"); runargs.push (this.sourcePath);
+			runargs.push ("-i", this.sourcePath);
 
 			runargs.push ("-vcodec");
 			if (this.configureMap.videoCodec != "") {
@@ -238,12 +264,22 @@ class CreateMediaStream extends TaskBase {
 			runargs.push (vcodec);
 
 			if (vcodec == "libx264") {
-				// TODO: Possibly use a preset other than ultrafast
-				runargs.push ("-preset"); runargs.push ("ultrafast");
+				runargs.push ("-preset");
+				if (typeof this.configureMap.h264Preset == "string") {
+					runargs.push (this.configureMap.h264Preset);
+				}
+				else {
+					runargs.push ("ultrafast");
+				}
 			}
 			if (metadata.frameRate > 29.97) {
 				metadata.frameRate = 29.97;
-				runargs.push ("-r"); runargs.push ("29.97");
+				runargs.push ("-r", "29.97");
+			}
+			if ((typeof this.configureMap.width == "number") && (typeof this.configureMap.height == "number")) {
+				metadata.width = this.configureMap.width;
+				metadata.height = this.configureMap.height;
+				runargs.push ("-s", `${this.configureMap.width}x${this.configureMap.height}`);
 			}
 
 			runargs.push ("-acodec");
@@ -254,13 +290,13 @@ class CreateMediaStream extends TaskBase {
 				runargs.push ("aac");
 			}
 
-			runargs.push ("-map"); runargs.push (metadata.videoStreamId);
-			runargs.push ("-map"); runargs.push (metadata.audioStreamId);
+			runargs.push ("-map", metadata.videoStreamId);
+			runargs.push ("-map", metadata.audioStreamId);
 
-			runargs.push ("-f"); runargs.push ("ssegment");
-			runargs.push ("-segment_list"); runargs.push (App.STREAM_INDEX_FILENAME);
-			runargs.push ("-segment_list_flags"); runargs.push ("live");
-			runargs.push ("-segment_time"); runargs.push ("2");
+			runargs.push ("-f", "ssegment");
+			runargs.push ("-segment_list", App.STREAM_INDEX_FILENAME);
+			runargs.push ("-segment_list_flags", "live");
+			runargs.push ("-segment_time", "2");
 			runargs.push ("%05d.ts");
 
 			this.destMetadata = metadata;
@@ -366,7 +402,7 @@ class CreateMediaStream extends TaskBase {
 		}));
 	}
 
-	// Return a promise that determines the total size of all generated stream files and stores the result in this.streamSize
+	// Return a promise that determines the total size of all generated stream files and resolves with the result in bytes
 	computeStreamSize () {
 		return (new Promise ((resolve, reject) => {
 			let streamsize, files, fileindex, statNextFile, statFileComplete;
@@ -383,8 +419,7 @@ class CreateMediaStream extends TaskBase {
 			statNextFile = () => {
 				++fileindex;
 				if (fileindex >= files.length) {
-					this.streamSize = streamsize;
-					resolve ();
+					resolve (streamsize);
 					return;
 				}
 				FsUtil.statFile (files[fileindex], statFileComplete);

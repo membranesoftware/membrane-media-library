@@ -31,11 +31,12 @@
 // Functions for use in sending or receiving remote commands
 
 var SystemInterface = exports;
-SystemInterface.Version = "7-stable-7790b601";
+SystemInterface.Version = "8-stable-f11d18e2";
 SystemInterface.Command = { };
 SystemInterface.Command.AgentConfiguration = {"id":45,"name":"AgentConfiguration","paramType":"AgentConfiguration"};
 SystemInterface.Command.AgentContact = {"id":33,"name":"AgentContact","paramType":"AgentContact"};
 SystemInterface.Command.AgentStatus = {"id":1,"name":"AgentStatus","paramType":"AgentStatus"};
+SystemInterface.Command.AuthorizationRequired = {"id":62,"name":"AuthorizationRequired","paramType":"EmptyObject"};
 SystemInterface.Command.Authorize = {"id":19,"name":"Authorize","paramType":"Authorize"};
 SystemInterface.Command.AuthorizeResult = {"id":13,"name":"AuthorizeResult","paramType":"AuthorizeResult"};
 SystemInterface.Command.CancelTask = {"id":28,"name":"CancelTask","paramType":"CancelTask"};
@@ -59,6 +60,7 @@ SystemInterface.Command.GetMedia = {"id":15,"name":"GetMedia","paramType":"GetMe
 SystemInterface.Command.GetStatus = {"id":8,"name":"GetStatus","paramType":"EmptyObject"};
 SystemInterface.Command.GetThumbnailImage = {"id":5,"name":"GetThumbnailImage","paramType":"GetThumbnailImage"};
 SystemInterface.Command.IntentState = {"id":36,"name":"IntentState","paramType":"IntentState"};
+SystemInterface.Command.LinkSuccess = {"id":63,"name":"LinkSuccess","paramType":"EmptyObject"};
 SystemInterface.Command.MediaDisplayIntentState = {"id":51,"name":"MediaDisplayIntentState","paramType":"MediaDisplayIntentState"};
 SystemInterface.Command.MediaItem = {"id":16,"name":"MediaItem","paramType":"MediaItem"};
 SystemInterface.Command.MediaServerStatus = {"id":9,"name":"MediaServerStatus","paramType":"MediaServerStatus"};
@@ -73,6 +75,7 @@ SystemInterface.Command.ReportContact = {"id":32,"name":"ReportContact","paramTy
 SystemInterface.Command.ReportStatus = {"id":2,"name":"ReportStatus","paramType":"ReportStatus"};
 SystemInterface.Command.ScanMediaItems = {"id":58,"name":"ScanMediaItems","paramType":"EmptyObject"};
 SystemInterface.Command.ServerError = {"id":20,"name":"ServerError","paramType":"ServerError"};
+SystemInterface.Command.SetAdminSecret = {"id":61,"name":"SetAdminSecret","paramType":"SetAdminSecret"};
 SystemInterface.Command.SetIntentActive = {"id":38,"name":"SetIntentActive","paramType":"SetIntentActive"};
 SystemInterface.Command.ShowWebUrl = {"id":34,"name":"ShowWebUrl","paramType":"ShowWebUrl"};
 SystemInterface.Command.ShutdownAgent = {"id":43,"name":"ShutdownAgent","paramType":"EmptyObject"};
@@ -90,6 +93,7 @@ SystemInterface.CommandId = { };
 SystemInterface.CommandId.AgentConfiguration = 45;
 SystemInterface.CommandId.AgentContact = 33;
 SystemInterface.CommandId.AgentStatus = 1;
+SystemInterface.CommandId.AuthorizationRequired = 62;
 SystemInterface.CommandId.Authorize = 19;
 SystemInterface.CommandId.AuthorizeResult = 13;
 SystemInterface.CommandId.CancelTask = 28;
@@ -113,6 +117,7 @@ SystemInterface.CommandId.GetMedia = 15;
 SystemInterface.CommandId.GetStatus = 8;
 SystemInterface.CommandId.GetThumbnailImage = 5;
 SystemInterface.CommandId.IntentState = 36;
+SystemInterface.CommandId.LinkSuccess = 63;
 SystemInterface.CommandId.MediaDisplayIntentState = 51;
 SystemInterface.CommandId.MediaItem = 16;
 SystemInterface.CommandId.MediaServerStatus = 9;
@@ -127,6 +132,7 @@ SystemInterface.CommandId.ReportContact = 32;
 SystemInterface.CommandId.ReportStatus = 2;
 SystemInterface.CommandId.ScanMediaItems = 58;
 SystemInterface.CommandId.ServerError = 20;
+SystemInterface.CommandId.SetAdminSecret = 61;
 SystemInterface.CommandId.SetIntentActive = 38;
 SystemInterface.CommandId.ShowWebUrl = 34;
 SystemInterface.CommandId.ShutdownAgent = 43;
@@ -150,7 +156,7 @@ SystemInterface.Type.CancelTask = [{"name":"taskId","type":"string","flags":35}]
 SystemInterface.Type.CommandResult = [{"name":"success","type":"boolean","flags":1},{"name":"error","type":"string","flags":0},{"name":"itemId","type":"string","flags":32},{"name":"item","type":"object","flags":256},{"name":"taskId","type":"string","flags":32}];
 SystemInterface.Type.CreateCacheStream = [{"name":"streamUrl","type":"string","flags":67},{"name":"thumbnailUrl","type":"string","flags":67},{"name":"streamId","type":"string","flags":35},{"name":"streamName","type":"string","flags":3},{"name":"duration","type":"number","flags":17},{"name":"width","type":"number","flags":17},{"name":"height","type":"number","flags":17},{"name":"bitrate","type":"number","flags":17},{"name":"frameRate","type":"number","flags":17}];
 SystemInterface.Type.CreateMediaDisplayIntent = [{"name":"displayName","type":"string","flags":3},{"name":"items","type":"array","containerType":"MediaDisplayItem","flags":3},{"name":"isShuffle","type":"boolean","flags":1},{"name":"minStartPositionDelta","type":"number","flags":129,"rangeMin":0,"rangeMax":100,"defaultValue":0},{"name":"maxStartPositionDelta","type":"number","flags":129,"rangeMin":0,"rangeMax":100,"defaultValue":0},{"name":"minItemDisplayDuration","type":"number","flags":17,"defaultValue":300},{"name":"maxItemDisplayDuration","type":"number","flags":17,"defaultValue":900}];
-SystemInterface.Type.CreateMediaStream = [{"name":"name","type":"string","flags":1},{"name":"mediaServerAgentId","type":"string","flags":34},{"name":"mediaId","type":"string","flags":35},{"name":"mediaUrl","type":"string","flags":65,"defaultValue":""}];
+SystemInterface.Type.CreateMediaStream = [{"name":"name","type":"string","flags":1},{"name":"mediaServerAgentId","type":"string","flags":34},{"name":"mediaId","type":"string","flags":35},{"name":"mediaUrl","type":"string","flags":65,"defaultValue":""},{"name":"width","type":"number","flags":8},{"name":"height","type":"number","flags":8},{"name":"h264Preset","type":"string","flags":512,"enumValues":["ultrafast","superfast","veryfast","faster","fast","medium","slow","slower","veryslow"]}];
 SystemInterface.Type.CreateWebDisplayIntent = [{"name":"displayName","type":"string","flags":3},{"name":"urls","type":"array","containerType":"string","flags":3},{"name":"isShuffle","type":"boolean","flags":1},{"name":"minItemDisplayDuration","type":"number","flags":17,"defaultValue":300},{"name":"maxItemDisplayDuration","type":"number","flags":17,"defaultValue":900}];
 SystemInterface.Type.EmptyObject = [];
 SystemInterface.Type.EventRecord = [{"name":"record","type":"object","flags":257}];
@@ -178,6 +184,7 @@ SystemInterface.Type.RemoveStream = [{"name":"id","type":"string","flags":35}];
 SystemInterface.Type.ReportContact = [{"name":"destination","type":"string","flags":65},{"name":"reportCommandType","type":"number","flags":1,"defaultValue":0}];
 SystemInterface.Type.ReportStatus = [{"name":"destination","type":"string","flags":65},{"name":"reportCommandType","type":"number","flags":1,"defaultValue":0}];
 SystemInterface.Type.ServerError = [{"name":"error","type":"string","flags":0,"defaultValue":""}];
+SystemInterface.Type.SetAdminSecret = [{"name":"secret","type":"string","flags":1}];
 SystemInterface.Type.SetIntentActive = [{"name":"id","type":"string","flags":35},{"name":"isActive","type":"boolean","flags":1}];
 SystemInterface.Type.ShowWebUrl = [{"name":"url","type":"string","flags":67}];
 SystemInterface.Type.StreamItem = [{"name":"id","type":"string","flags":35},{"name":"name","type":"string","flags":3},{"name":"sourceId","type":"string","flags":33,"defaultValue":""},{"name":"duration","type":"number","flags":17},{"name":"width","type":"number","flags":17},{"name":"height","type":"number","flags":17},{"name":"size","type":"number","flags":17},{"name":"bitrate","type":"number","flags":17},{"name":"frameRate","type":"number","flags":17},{"name":"hlsTargetDuration","type":"number","flags":17},{"name":"segmentCount","type":"number","flags":17},{"name":"segmentFilenames","type":"array","containerType":"string","flags":1},{"name":"segmentLengths","type":"array","containerType":"number","flags":17},{"name":"segmentPositions","type":"array","containerType":"number","flags":17}];
@@ -190,53 +197,54 @@ SystemInterface.Type.WatchEvents = [];
 SystemInterface.Type.WatchTasks = [{"name":"taskIds","type":"array","containerType":"string","flags":3}];
 SystemInterface.Type.WebDisplayIntentState = [{"name":"urls","type":"array","containerType":"string","flags":3},{"name":"urlChoices","type":"array","containerType":"number","flags":3},{"name":"agentMap","type":"object","flags":0},{"name":"isShuffle","type":"boolean","flags":1},{"name":"minItemDisplayDuration","type":"number","flags":17,"defaultValue":300},{"name":"maxItemDisplayDuration","type":"number","flags":17,"defaultValue":900}];
 SystemInterface.Type.AgentConfiguration.updateHash = function(p, f) {f(p.displayName);f(p.isEnabled ? "true" : "false");if((typeof p.mediaServerConfiguration == "object") && (p.mediaServerConfiguration != null)) {SystemInterface.Type.MediaServerConfiguration.updateHash(p.mediaServerConfiguration, f);}if((typeof p.monitorServerConfiguration == "object") && (p.monitorServerConfiguration != null)) {SystemInterface.Type.MonitorServerConfiguration.updateHash(p.monitorServerConfiguration, f);}if((typeof p.streamServerConfiguration == "object") && (p.streamServerConfiguration != null)) {SystemInterface.Type.StreamServerConfiguration.updateHash(p.streamServerConfiguration, f);}};
-SystemInterface.Type.AgentContact.updateHash = function(p, f) {f(p.id);if (typeof p.nodeVersion == "string") {f(p.nodeVersion);}f("" + p.tcpPort1);f("" + p.tcpPort2);f("" + p.udpPort);f(p.urlHostname);f(p.version);};
-SystemInterface.Type.AgentStatus.updateHash = function(p, f) {f(p.applicationName);f(p.displayName);f(p.id);f(p.isEnabled ? "true" : "false");f(p.linkPath);f("" + p.maxRunCount);if((typeof p.mediaServerStatus == "object") && (p.mediaServerStatus != null)) {SystemInterface.Type.MediaServerStatus.updateHash(p.mediaServerStatus, f);}if((typeof p.monitorServerStatus == "object") && (p.monitorServerStatus != null)) {SystemInterface.Type.MonitorServerStatus.updateHash(p.monitorServerStatus, f);}if (typeof p.nodeVersion == "string") {f(p.nodeVersion);}if (typeof p.platform == "string") {f(p.platform);}f("" + p.runCount);if((typeof p.streamServerStatus == "object") && (p.streamServerStatus != null)) {SystemInterface.Type.StreamServerStatus.updateHash(p.streamServerStatus, f);}f("" + p.taskCount);f("" + p.tcpPort1);f("" + p.tcpPort2);f("" + p.udpPort);f(p.uptime);f(p.urlHostname);f(p.version);};
+SystemInterface.Type.AgentContact.updateHash = function(p, f) {f(p.id);if(typeof p.nodeVersion == "string") {f(p.nodeVersion);}f("" + Math.trunc (p.tcpPort1));f("" + Math.trunc (p.tcpPort2));f("" + Math.trunc (p.udpPort));f(p.urlHostname);f(p.version);};
+SystemInterface.Type.AgentStatus.updateHash = function(p, f) {f(p.applicationName);f(p.displayName);f(p.id);f(p.isEnabled ? "true" : "false");f(p.linkPath);f("" + Math.trunc (p.maxRunCount));if((typeof p.mediaServerStatus == "object") && (p.mediaServerStatus != null)) {SystemInterface.Type.MediaServerStatus.updateHash(p.mediaServerStatus, f);}if((typeof p.monitorServerStatus == "object") && (p.monitorServerStatus != null)) {SystemInterface.Type.MonitorServerStatus.updateHash(p.monitorServerStatus, f);}if(typeof p.nodeVersion == "string") {f(p.nodeVersion);}if(typeof p.platform == "string") {f(p.platform);}f("" + Math.trunc (p.runCount));if((typeof p.streamServerStatus == "object") && (p.streamServerStatus != null)) {SystemInterface.Type.StreamServerStatus.updateHash(p.streamServerStatus, f);}f("" + Math.trunc (p.taskCount));f("" + Math.trunc (p.tcpPort1));f("" + Math.trunc (p.tcpPort2));f("" + Math.trunc (p.udpPort));f(p.uptime);f(p.urlHostname);f(p.version);};
 SystemInterface.Type.Authorize.updateHash = function(p, f) {f(p.token);};
 SystemInterface.Type.AuthorizeResult.updateHash = function(p, f) {f(p.token);};
 SystemInterface.Type.CancelTask.updateHash = function(p, f) {f(p.taskId);};
-SystemInterface.Type.CommandResult.updateHash = function(p, f) {if (typeof p.error == "string") {f(p.error);}if (typeof p.itemId == "string") {f(p.itemId);}f(p.success ? "true" : "false");if (typeof p.taskId == "string") {f(p.taskId);}};
-SystemInterface.Type.CreateCacheStream.updateHash = function(p, f) {f("" + p.bitrate);f("" + p.duration);f("" + p.frameRate);f("" + p.height);f(p.streamId);f(p.streamName);f(p.streamUrl);f(p.thumbnailUrl);f("" + p.width);};
-SystemInterface.Type.CreateMediaDisplayIntent.updateHash = function(p, f) {f(p.displayName);f(p.isShuffle ? "true" : "false");for(var i = 0; i < p.items.length; ++i) {SystemInterface.Type.MediaDisplayItem.updateHash(p.items[i], f);}f("" + p.maxItemDisplayDuration);f("" + p.maxStartPositionDelta);f("" + p.minItemDisplayDuration);f("" + p.minStartPositionDelta);};
-SystemInterface.Type.CreateMediaStream.updateHash = function(p, f) {f(p.mediaId);if (typeof p.mediaServerAgentId == "string") {f(p.mediaServerAgentId);}f(p.mediaUrl);f(p.name);};
-SystemInterface.Type.CreateWebDisplayIntent.updateHash = function(p, f) {f(p.displayName);f(p.isShuffle ? "true" : "false");f("" + p.maxItemDisplayDuration);f("" + p.minItemDisplayDuration);for(var i = 0; i < p.urls.length; ++i) {f(p.urls[i]);}};
+SystemInterface.Type.CommandResult.updateHash = function(p, f) {if(typeof p.error == "string") {f(p.error);}if(typeof p.itemId == "string") {f(p.itemId);}f(p.success ? "true" : "false");if(typeof p.taskId == "string") {f(p.taskId);}};
+SystemInterface.Type.CreateCacheStream.updateHash = function(p, f) {f("" + Math.trunc (p.bitrate));f("" + Math.trunc (p.duration));f("" + Math.trunc (p.frameRate));f("" + Math.trunc (p.height));f(p.streamId);f(p.streamName);f(p.streamUrl);f(p.thumbnailUrl);f("" + Math.trunc (p.width));};
+SystemInterface.Type.CreateMediaDisplayIntent.updateHash = function(p, f) {f(p.displayName);f(p.isShuffle ? "true" : "false");for(var i = 0; i < p.items.length; ++i) {SystemInterface.Type.MediaDisplayItem.updateHash(p.items[i], f);}f("" + Math.trunc (p.maxItemDisplayDuration));f("" + Math.trunc (p.maxStartPositionDelta));f("" + Math.trunc (p.minItemDisplayDuration));f("" + Math.trunc (p.minStartPositionDelta));};
+SystemInterface.Type.CreateMediaStream.updateHash = function(p, f) {if(typeof p.h264Preset == "string") {f(p.h264Preset);}if(typeof p.height == "number") {f("" + Math.trunc (p.height));}f(p.mediaId);if(typeof p.mediaServerAgentId == "string") {f(p.mediaServerAgentId);}f(p.mediaUrl);f(p.name);if(typeof p.width == "number") {f("" + Math.trunc (p.width));}};
+SystemInterface.Type.CreateWebDisplayIntent.updateHash = function(p, f) {f(p.displayName);f(p.isShuffle ? "true" : "false");f("" + Math.trunc (p.maxItemDisplayDuration));f("" + Math.trunc (p.minItemDisplayDuration));for(var i = 0; i < p.urls.length; ++i) {f(p.urls[i]);}};
 SystemInterface.Type.EmptyObject.updateHash = function(p, f) {};
 SystemInterface.Type.EventRecord.updateHash = function(p, f) {};
-SystemInterface.Type.FindItems.updateHash = function(p, f) {f("" + p.maxResults);f("" + p.resultOffset);f(p.searchKey);};
-SystemInterface.Type.FindMediaResult.updateHash = function(p, f) {f("" + p.resultOffset);f(p.searchKey);f("" + p.setSize);};
-SystemInterface.Type.FindStreamsResult.updateHash = function(p, f) {f("" + p.resultOffset);f(p.searchKey);f("" + p.setSize);};
+SystemInterface.Type.FindItems.updateHash = function(p, f) {f("" + Math.trunc (p.maxResults));f("" + Math.trunc (p.resultOffset));f(p.searchKey);};
+SystemInterface.Type.FindMediaResult.updateHash = function(p, f) {f("" + Math.trunc (p.resultOffset));f(p.searchKey);f("" + Math.trunc (p.setSize));};
+SystemInterface.Type.FindStreamsResult.updateHash = function(p, f) {f("" + Math.trunc (p.resultOffset));f(p.searchKey);f("" + Math.trunc (p.setSize));};
 SystemInterface.Type.GetHlsHtml5Interface.updateHash = function(p, f) {f(p.streamId);};
-SystemInterface.Type.GetHlsManifest.updateHash = function(p, f) {if(typeof p.maxStartPositionDelta == "number") {f("" + p.maxStartPositionDelta);}if(typeof p.minStartPositionDelta == "number") {f("" + p.minStartPositionDelta);}f("" + p.startPosition);f(p.streamId);};
-SystemInterface.Type.GetHlsSegment.updateHash = function(p, f) {f("" + p.segmentIndex);f(p.streamId);};
+SystemInterface.Type.GetHlsManifest.updateHash = function(p, f) {if(typeof p.maxStartPositionDelta == "number") {f("" + Math.trunc (p.maxStartPositionDelta));}if(typeof p.minStartPositionDelta == "number") {f("" + Math.trunc (p.minStartPositionDelta));}f("" + Math.trunc (p.startPosition));f(p.streamId);};
+SystemInterface.Type.GetHlsSegment.updateHash = function(p, f) {f("" + Math.trunc (p.segmentIndex));f(p.streamId);};
 SystemInterface.Type.GetMedia.updateHash = function(p, f) {f(p.id);};
-SystemInterface.Type.GetThumbnailImage.updateHash = function(p, f) {f(p.id);f("" + p.thumbnailIndex);};
+SystemInterface.Type.GetThumbnailImage.updateHash = function(p, f) {f(p.id);f("" + Math.trunc (p.thumbnailIndex));};
 SystemInterface.Type.IntentState.updateHash = function(p, f) {f(p.displayName);f(p.groupName);f(p.id);f(p.isActive ? "true" : "false");f(p.name);};
-SystemInterface.Type.MediaDisplayIntentState.updateHash = function(p, f) {f(p.isShuffle ? "true" : "false");for(var i = 0; i < p.itemChoices.length; ++i) {f("" + p.itemChoices[i]);}for(var i = 0; i < p.items.length; ++i) {SystemInterface.Type.MediaDisplayItem.updateHash(p.items[i], f);}f("" + p.maxItemDisplayDuration);f("" + p.maxStartPositionDelta);f("" + p.minItemDisplayDuration);f("" + p.minStartPositionDelta);};
-SystemInterface.Type.MediaDisplayItem.updateHash = function(p, f) {f(p.mediaName);if(typeof p.startPosition == "number") {f("" + p.startPosition);}f(p.streamId);f(p.streamUrl);};
-SystemInterface.Type.MediaItem.updateHash = function(p, f) {f("" + p.bitrate);f("" + p.duration);f("" + p.frameRate);f("" + p.height);f(p.id);f(p.mediaPath);f("" + p.mtime);f(p.name);f("" + p.size);f("" + p.width);};
-SystemInterface.Type.MediaServerConfiguration.updateHash = function(p, f) {if (typeof p.dataPath == "string") {f(p.dataPath);}if (typeof p.mediaPath == "string") {f(p.mediaPath);}if(typeof p.scanPeriod == "number") {f("" + p.scanPeriod);}};
-SystemInterface.Type.MediaServerStatus.updateHash = function(p, f) {f(p.isReady ? "true" : "false");f("" + p.mediaCount);f(p.mediaPath);f("" + p.thumbnailCount);f(p.thumbnailPath);};
+SystemInterface.Type.MediaDisplayIntentState.updateHash = function(p, f) {f(p.isShuffle ? "true" : "false");for(var i = 0; i < p.itemChoices.length; ++i) {f("" + Math.trunc (p.itemChoices[i]));}for(var i = 0; i < p.items.length; ++i) {SystemInterface.Type.MediaDisplayItem.updateHash(p.items[i], f);}f("" + Math.trunc (p.maxItemDisplayDuration));f("" + Math.trunc (p.maxStartPositionDelta));f("" + Math.trunc (p.minItemDisplayDuration));f("" + Math.trunc (p.minStartPositionDelta));};
+SystemInterface.Type.MediaDisplayItem.updateHash = function(p, f) {f(p.mediaName);if(typeof p.startPosition == "number") {f("" + Math.trunc (p.startPosition));}f(p.streamId);f(p.streamUrl);};
+SystemInterface.Type.MediaItem.updateHash = function(p, f) {f("" + Math.trunc (p.bitrate));f("" + Math.trunc (p.duration));f("" + Math.trunc (p.frameRate));f("" + Math.trunc (p.height));f(p.id);f(p.mediaPath);f("" + Math.trunc (p.mtime));f(p.name);f("" + Math.trunc (p.size));f("" + Math.trunc (p.width));};
+SystemInterface.Type.MediaServerConfiguration.updateHash = function(p, f) {if(typeof p.dataPath == "string") {f(p.dataPath);}if(typeof p.mediaPath == "string") {f(p.mediaPath);}if(typeof p.scanPeriod == "number") {f("" + Math.trunc (p.scanPeriod));}};
+SystemInterface.Type.MediaServerStatus.updateHash = function(p, f) {f(p.isReady ? "true" : "false");f("" + Math.trunc (p.mediaCount));f(p.mediaPath);f("" + Math.trunc (p.thumbnailCount));f(p.thumbnailPath);};
 SystemInterface.Type.MonitorServerConfiguration.updateHash = function(p, f) {};
-SystemInterface.Type.MonitorServerStatus.updateHash = function(p, f) {f("" + p.freeStorage);f(p.intentName);f(p.isPlaying ? "true" : "false");f(p.isShowingUrl ? "true" : "false");f(p.mediaName);f(p.showUrl);f("" + p.streamCount);f(p.thumbnailPath);f("" + p.totalStorage);};
-SystemInterface.Type.PlayCacheStream.updateHash = function(p, f) {if(typeof p.maxStartPositionDelta == "number") {f("" + p.maxStartPositionDelta);}if(typeof p.minStartPositionDelta == "number") {f("" + p.minStartPositionDelta);}if(typeof p.startPosition == "number") {f("" + p.startPosition);}f(p.streamId);};
-SystemInterface.Type.PlayMedia.updateHash = function(p, f) {if(typeof p.maxStartPositionDelta == "number") {f("" + p.maxStartPositionDelta);}f(p.mediaName);if(typeof p.minStartPositionDelta == "number") {f("" + p.minStartPositionDelta);}if(typeof p.startPosition == "number") {f("" + p.startPosition);}if (typeof p.streamId == "string") {f(p.streamId);}if (typeof p.streamUrl == "string") {f(p.streamUrl);}};
+SystemInterface.Type.MonitorServerStatus.updateHash = function(p, f) {f("" + Math.trunc (p.freeStorage));f(p.intentName);f(p.isPlaying ? "true" : "false");f(p.isShowingUrl ? "true" : "false");f(p.mediaName);f(p.showUrl);f("" + Math.trunc (p.streamCount));f(p.thumbnailPath);f("" + Math.trunc (p.totalStorage));};
+SystemInterface.Type.PlayCacheStream.updateHash = function(p, f) {if(typeof p.maxStartPositionDelta == "number") {f("" + Math.trunc (p.maxStartPositionDelta));}if(typeof p.minStartPositionDelta == "number") {f("" + Math.trunc (p.minStartPositionDelta));}if(typeof p.startPosition == "number") {f("" + Math.trunc (p.startPosition));}f(p.streamId);};
+SystemInterface.Type.PlayMedia.updateHash = function(p, f) {if(typeof p.maxStartPositionDelta == "number") {f("" + Math.trunc (p.maxStartPositionDelta));}f(p.mediaName);if(typeof p.minStartPositionDelta == "number") {f("" + Math.trunc (p.minStartPositionDelta));}if(typeof p.startPosition == "number") {f("" + Math.trunc (p.startPosition));}if(typeof p.streamId == "string") {f(p.streamId);}if(typeof p.streamUrl == "string") {f(p.streamUrl);}};
 SystemInterface.Type.ReadEvents.updateHash = function(p, f) {};
 SystemInterface.Type.RemoveIntent.updateHash = function(p, f) {f(p.id);};
 SystemInterface.Type.RemoveStream.updateHash = function(p, f) {f(p.id);};
-SystemInterface.Type.ReportContact.updateHash = function(p, f) {f(p.destination);f("" + p.reportCommandType);};
-SystemInterface.Type.ReportStatus.updateHash = function(p, f) {f(p.destination);f("" + p.reportCommandType);};
-SystemInterface.Type.ServerError.updateHash = function(p, f) {if (typeof p.error == "string") {f(p.error);}};
+SystemInterface.Type.ReportContact.updateHash = function(p, f) {f(p.destination);f("" + Math.trunc (p.reportCommandType));};
+SystemInterface.Type.ReportStatus.updateHash = function(p, f) {f(p.destination);f("" + Math.trunc (p.reportCommandType));};
+SystemInterface.Type.ServerError.updateHash = function(p, f) {if(typeof p.error == "string") {f(p.error);}};
+SystemInterface.Type.SetAdminSecret.updateHash = function(p, f) {f(p.secret);};
 SystemInterface.Type.SetIntentActive.updateHash = function(p, f) {f(p.id);f(p.isActive ? "true" : "false");};
 SystemInterface.Type.ShowWebUrl.updateHash = function(p, f) {f(p.url);};
-SystemInterface.Type.StreamItem.updateHash = function(p, f) {f("" + p.bitrate);f("" + p.duration);f("" + p.frameRate);f("" + p.height);f("" + p.hlsTargetDuration);f(p.id);f(p.name);f("" + p.segmentCount);for(var i = 0; i < p.segmentFilenames.length; ++i) {f(p.segmentFilenames[i]);}for(var i = 0; i < p.segmentLengths.length; ++i) {f("" + p.segmentLengths[i]);}for(var i = 0; i < p.segmentPositions.length; ++i) {f("" + p.segmentPositions[i]);}f("" + p.size);f(p.sourceId);f("" + p.width);};
-SystemInterface.Type.StreamServerConfiguration.updateHash = function(p, f) {if (typeof p.dataPath == "string") {f(p.dataPath);}};
-SystemInterface.Type.StreamServerStatus.updateHash = function(p, f) {f("" + p.freeStorage);f(p.hlsHtml5Path);f(p.hlsStreamPath);f(p.isReady ? "true" : "false");f("" + p.streamCount);f(p.thumbnailPath);f("" + p.totalStorage);};
-SystemInterface.Type.TaskItem.updateHash = function(p, f) {f("" + p.createTime);f(p.description);f("" + p.endTime);f(p.id);f(p.isRunning ? "true" : "false");f(p.name);f("" + p.percentComplete);f(p.subtitle);for(var i = 0; i < p.tags.length; ++i) {f(p.tags[i]);}};
+SystemInterface.Type.StreamItem.updateHash = function(p, f) {f("" + Math.trunc (p.bitrate));f("" + Math.trunc (p.duration));f("" + Math.trunc (p.frameRate));f("" + Math.trunc (p.height));f("" + Math.trunc (p.hlsTargetDuration));f(p.id);f(p.name);f("" + Math.trunc (p.segmentCount));for(var i = 0; i < p.segmentFilenames.length; ++i) {f(p.segmentFilenames[i]);}for(var i = 0; i < p.segmentLengths.length; ++i) {f("" + Math.trunc (p.segmentLengths[i]));}for(var i = 0; i < p.segmentPositions.length; ++i) {f("" + Math.trunc (p.segmentPositions[i]));}f("" + Math.trunc (p.size));f(p.sourceId);f("" + Math.trunc (p.width));};
+SystemInterface.Type.StreamServerConfiguration.updateHash = function(p, f) {if(typeof p.dataPath == "string") {f(p.dataPath);}};
+SystemInterface.Type.StreamServerStatus.updateHash = function(p, f) {f("" + Math.trunc (p.freeStorage));f(p.hlsHtml5Path);f(p.hlsStreamPath);f(p.isReady ? "true" : "false");f("" + Math.trunc (p.streamCount));f(p.thumbnailPath);f("" + Math.trunc (p.totalStorage));};
+SystemInterface.Type.TaskItem.updateHash = function(p, f) {f("" + Math.trunc (p.createTime));f(p.description);f("" + Math.trunc (p.endTime));f(p.id);f(p.isRunning ? "true" : "false");f(p.name);f("" + Math.trunc (p.percentComplete));f(p.subtitle);for(var i = 0; i < p.tags.length; ++i) {f(p.tags[i]);}};
 SystemInterface.Type.UpdateAgentConfiguration.updateHash = function(p, f) {SystemInterface.Type.AgentConfiguration.updateHash(p.agentConfiguration, f);};
 SystemInterface.Type.UpdateIntentState.updateHash = function(p, f) {f(p.id);f(p.isReplace ? "true" : "false");};
 SystemInterface.Type.WatchEvents.updateHash = function(p, f) {};
 SystemInterface.Type.WatchTasks.updateHash = function(p, f) {for(var i = 0; i < p.taskIds.length; ++i) {f(p.taskIds[i]);}};
-SystemInterface.Type.WebDisplayIntentState.updateHash = function(p, f) {f(p.isShuffle ? "true" : "false");f("" + p.maxItemDisplayDuration);f("" + p.minItemDisplayDuration);for(var i = 0; i < p.urlChoices.length; ++i) {f("" + p.urlChoices[i]);}for(var i = 0; i < p.urls.length; ++i) {f(p.urls[i]);}};
+SystemInterface.Type.WebDisplayIntentState.updateHash = function(p, f) {f(p.isShuffle ? "true" : "false");f("" + Math.trunc (p.maxItemDisplayDuration));f("" + Math.trunc (p.minItemDisplayDuration));for(var i = 0; i < p.urlChoices.length; ++i) {f("" + Math.trunc (p.urlChoices[i]));}for(var i = 0; i < p.urls.length; ++i) {f(p.urls[i]);}};
 SystemInterface.ParamFlag = { };
 SystemInterface.ParamFlag.Required = 1;
 SystemInterface.ParamFlag.NotEmpty = 2;
@@ -247,6 +255,7 @@ SystemInterface.ParamFlag.Uuid = 32;
 SystemInterface.ParamFlag.Url = 64;
 SystemInterface.ParamFlag.RangedNumber = 128;
 SystemInterface.ParamFlag.Command = 256;
+SystemInterface.ParamFlag.EnumValue = 512;
 SystemInterface.Constant = { };
 SystemInterface.Constant.MaxCommandPriority = 100;
 SystemInterface.Constant.CreateTimePrefixField = "a";
@@ -372,6 +381,11 @@ SystemInterface.getParamError = function (fields, type, allowUnknownKeys) {
 						}
 					}
 				}
+				if ((param.flags & SystemInterface.ParamFlag.EnumValue) && ((typeof param.enumValues == "object") && (param.enumValues != null) && (param.enumValues.length !== undefined))) {
+					if (param.enumValues.indexOf (value) < 0) {
+						return ("Parameter field \"" + param.name + "\" must be one of: " + param.enumValues.join (", "));
+					}
+				}
 				break;
 			}
 			case "boolean": {
@@ -403,6 +417,11 @@ SystemInterface.getParamError = function (fields, type, allowUnknownKeys) {
 				if ((param.flags & SystemInterface.ParamFlag.Url) && (value != "")) {
 					if (value.search (/[^A-Za-z0-9\$\-_\.\+\!\*\?\(\),\/:;=&%#]/) != -1) {
 						return ("Parameter field \"" + param.name + "\" must contain a URL string");
+					}
+				}
+				if ((param.flags & SystemInterface.ParamFlag.EnumValue) && ((typeof param.enumValues == "object") && (param.enumValues != null) && (param.enumValues.length !== undefined))) {
+					if (param.enumValues.indexOf (value) < 0) {
+						return ("Parameter field \"" + param.name + "\" must be one of: " + param.enumValues.join (", "));
 					}
 				}
 				break;
@@ -441,6 +460,11 @@ SystemInterface.getParamError = function (fields, type, allowUnknownKeys) {
 								}
 							}
 						}
+						if ((param.flags & SystemInterface.ParamFlag.EnumValue) && ((typeof param.enumValues == "object") && (param.enumValues != null) && (param.enumValues.length !== undefined))) {
+							if (param.enumValues.indexOf (item) < 0) {
+								return ("Parameter field \"" + param.name + "\" must contain values from: " + param.enumValues.join (", "));
+							}
+						}
 					}
 				}
 				else if (containertype == "boolean") {
@@ -476,6 +500,11 @@ SystemInterface.getParamError = function (fields, type, allowUnknownKeys) {
 						if ((param.flags & SystemInterface.ParamFlag.Url) && (item != "")) {
 							if (item.search (/[^A-Za-z0-9\$\-_\.\+\!\*\?\(\),\/:;=&]/) != -1) {
 								return ("Parameter field \"" + param.name + "\" must contain URL strings");
+							}
+						}
+						if ((param.flags & SystemInterface.ParamFlag.EnumValue) && ((typeof param.enumValues == "object") && (param.enumValues != null) && (param.enumValues.length !== undefined))) {
+							if (param.enumValues.indexOf (item) < 0) {
+								return ("Parameter field \"" + param.name + "\" must contain values from: " + param.enumValues.join (", "));
 							}
 						}
 					}
@@ -526,7 +555,7 @@ SystemInterface.getParamError = function (fields, type, allowUnknownKeys) {
 					for (j in value) {
 						item = value[j];
 						if (typeof item != "number") {
-							return ("Parameter field \"" + param.name + "\" has number array with invalid items");
+							return ("Parameter field \"" + param.name + "\" has number map with invalid items");
 						}
 
 						if (param.flags & SystemInterface.ParamFlag.GreaterThanZero) {
@@ -546,13 +575,18 @@ SystemInterface.getParamError = function (fields, type, allowUnknownKeys) {
 								}
 							}
 						}
+						if ((param.flags & SystemInterface.ParamFlag.EnumValue) && ((typeof param.enumValues == "object") && (param.enumValues != null) && (param.enumValues.length !== undefined))) {
+							if (param.enumValues.indexOf (item) < 0) {
+								return ("Parameter field \"" + param.name + "\" must contain values from: " + param.enumValues.join (", "));
+							}
+						}
 					}
 				}
 				else if (containertype == "boolean") {
 					for (j in value) {
 						item = value[j];
 						if (typeof item != "boolean") {
-							return ("Parameter field \"" + param.name + "\" has boolean array with invalid items");
+							return ("Parameter field \"" + param.name + "\" has boolean map with invalid items");
 						}
 					}
 				}
@@ -560,7 +594,7 @@ SystemInterface.getParamError = function (fields, type, allowUnknownKeys) {
 					for (j in value) {
 						item = value[j];
 						if (typeof item != "string") {
-							return ("Parameter field \"" + param.name + "\" has string array with invalid items");
+							return ("Parameter field \"" + param.name + "\" has string map with invalid items");
 						}
 
 						if (param.flags & SystemInterface.ParamFlag.NotEmpty) {
@@ -583,13 +617,18 @@ SystemInterface.getParamError = function (fields, type, allowUnknownKeys) {
 								return ("Parameter field \"" + param.name + "\" must contain URL strings");
 							}
 						}
+						if ((param.flags & SystemInterface.ParamFlag.EnumValue) && ((typeof param.enumValues == "object") && (param.enumValues != null) && (param.enumValues.length !== undefined))) {
+							if (param.enumValues.indexOf (item) < 0) {
+								return ("Parameter field \"" + param.name + "\" must contain values from: " + param.enumValues.join (", "));
+							}
+						}
 					}
 				}
 				else if (containertype == "object") {
 					for (j in value) {
 						item = value[j];
 						if ((typeof item != "object") || (item == null)) {
-							return ("Parameter field \"" + param.name + "\" has object array with invalid items");
+							return ("Parameter field \"" + param.name + "\" has object map with invalid items");
 						}
 
 						if ((param.flags & SystemInterface.ParamFlag.Command) && (item != null)) {
@@ -786,7 +825,7 @@ SystemInterface.getCommandAuthorizationHash = function (command, authSecret, aut
 	hashUpdateFn (authToken);
 	hashUpdateFn (command.commandName);
 	if (typeof command.prefix[SystemInterface.Constant.CreateTimePrefixField] == "number") {
-		hashUpdateFn ("" + command.prefix[SystemInterface.Constant.CreateTimePrefixField]);
+		hashUpdateFn ("" + Math.trunc (command.prefix[SystemInterface.Constant.CreateTimePrefixField]));
 	}
 	if (typeof command.prefix[SystemInterface.Constant.AgentIdPrefixField] == "string") {
 		hashUpdateFn (command.prefix[SystemInterface.Constant.AgentIdPrefixField]);
@@ -795,13 +834,13 @@ SystemInterface.getCommandAuthorizationHash = function (command, authSecret, aut
 		hashUpdateFn (command.prefix[SystemInterface.Constant.UserIdPrefixField]);
 	}
 	if (typeof command.prefix[SystemInterface.Constant.PriorityPrefixField] == "number") {
-		hashUpdateFn ("" + command.prefix[SystemInterface.Constant.PriorityPrefixField]);
+		hashUpdateFn ("" + Math.trunc (command.prefix[SystemInterface.Constant.PriorityPrefixField]));
 	}
 	if (typeof command.prefix[SystemInterface.Constant.StartTimePrefixField] == "number") {
-		hashUpdateFn ("" + command.prefix[SystemInterface.Constant.StartTimePrefixField]);
+		hashUpdateFn ("" + Math.trunc (command.prefix[SystemInterface.Constant.StartTimePrefixField]));
 	}
 	if (typeof command.prefix[SystemInterface.Constant.DurationPrefixField] == "number") {
-		hashUpdateFn ("" + command.prefix[SystemInterface.Constant.DurationPrefixField]);
+		hashUpdateFn ("" + Math.trunc (command.prefix[SystemInterface.Constant.DurationPrefixField]));
 	}
 
 	paramtype.updateHash (command.params, hashUpdateFn);

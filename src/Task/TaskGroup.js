@@ -195,7 +195,7 @@ class TaskGroup {
 			};
 
 			this.eventEmitter.addListener (taskId, execute);
-			client.on ("disconnect", () => {
+			client.once ("disconnect", () => {
 				this.eventEmitter.removeListener (taskId, execute);
 			});
 		};
