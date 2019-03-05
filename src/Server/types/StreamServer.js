@@ -148,6 +148,19 @@ class StreamServer extends ServerBase {
 				}
 			});
 
+			App.systemAgent.addSecondaryRequestHandler ("/" + HLS_SEGMENT_PATH, (cmdInv, request, response) => {
+				switch (cmdInv.command) {
+					case SystemInterface.CommandId.GetHlsSegment: {
+						this.handleGetHlsSegmentRequest (cmdInv, request, response);
+						break;
+					}
+					default: {
+						App.systemAgent.endRequest (request, response, 400, "Bad request");
+						break;
+					}
+				}
+			});
+
 			App.systemAgent.addSecondaryRequestHandler (HLS_HTML5_PATH, (cmdInv, request, response) => {
 				switch (cmdInv.command) {
 					case SystemInterface.CommandId.GetHlsHtml5Interface: {

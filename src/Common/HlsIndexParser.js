@@ -37,6 +37,10 @@ const Log = require (App.SOURCE_DIRECTORY + "/Log");
 function parse (indexData) {
 	var data, lines, i, line, m, lastduration, pos, val;
 
+	if (typeof indexData != "string") {
+		return (null);
+	}
+
 	data = {
 		segmentCount: 0,
 		segmentFilenames: [ ],
@@ -80,6 +84,10 @@ function parse (indexData) {
 			}
 			continue;
 		}
+	}
+
+	if (data.segmentCount <= 0) {
+		return (null);
 	}
 
 	return (data);

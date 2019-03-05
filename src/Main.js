@@ -272,6 +272,7 @@ function startComplete (err) {
 	}
 
 	Log.info (`${App.AGENT_APPLICATION_NAME} started; version=${App.VERSION} serverAddress=${App.systemAgent.urlHostname}:${App.systemAgent.httpServerPort1} hostname=${App.systemAgent.urlHostname} tcpPort1=${App.systemAgent.httpServerPort1} tcpPort2=${App.systemAgent.httpServerPort2} agentId=${App.systemAgent.agentId}`);
+	Log.notice (`${App.AGENT_APPLICATION_NAME} is supported by donations from users like you. If you get utility and enjoyment from this application, please think about contributing money to support its development. Any amount helps! https:\/\/membranesoftware.com\/contribute\/`);
 }
 
 // Process event handlers

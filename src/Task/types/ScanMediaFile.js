@@ -36,7 +36,7 @@ const Path = require ("path");
 const Log = require (App.SOURCE_DIRECTORY + "/Log");
 const FsUtil = require (App.SOURCE_DIRECTORY + "/FsUtil");
 const SystemInterface = require (App.SOURCE_DIRECTORY + "/SystemInterface");
-const TranscodeOutputParser = require (App.SOURCE_DIRECTORY + "/Common/TranscodeOutputParser");
+const FfprobeJsonParser = require (App.SOURCE_DIRECTORY + "/Common/FfprobeJsonParser");
 const TaskBase = require (App.SOURCE_DIRECTORY + "/Task/TaskBase");
 
 class ScanMediaFile extends TaskBase {
@@ -75,6 +75,7 @@ class ScanMediaFile extends TaskBase {
 		];
 
 		this.progressPercentDelta = 1;
+		this.sourceParser = { };
 	}
 
 	// Subclass method. Implementations should execute actions appropriate when the task has been successfully configured
@@ -115,8 +116,15 @@ class ScanMediaFile extends TaskBase {
 				bitrate: 0
 			};
 
-			parser = new TranscodeOutputParser (this.configureMap.mediaPath);
-			proc = App.systemAgent.createFfmpegProcess ([ "-i", this.configureMap.mediaPath ], null, processData, processEnded);
+			parser = new FfprobeJsonParser (this.configureMap.mediaPath);
+			proc = App.systemAgent.createFfprobeProcess ([
+				"-hide_banner",
+				"-loglevel", "quiet",
+				"-i", this.configureMap.mediaPath,
+				"-print_format", "json",
+				"-show_format",
+				"-show_streams"
+			], null, processData, processEnded);
 		};
 
 		processData = (lines, dataParseCallback) => {
@@ -124,27 +132,26 @@ class ScanMediaFile extends TaskBase {
 			process.nextTick (dataParseCallback);
 		};
 		processEnded = () => {
-			let metadata;
-
 			if (proc.hasError) {
 				Log.warn (`Failed to scan media file; filename="${this.configureMap.mediaPath}" err="Scan process ended with error"`);
 				this.end ();
 				return;
 			}
 
-			metadata = parser.getMetadata ();
-			Log.debug (`Media file scan complete; filename=${this.configureMap.mediaPath} metadata=${JSON.stringify (metadata)}`);
-			if (! parser.hasMetadata ()) {
+			parser.close ();
+			Log.debug (`Media file scan complete; success=${parser.isParseSuccess} metadata=${parser.toString ()}`);
+			if (! parser.isParseSuccess) {
 				Log.warn (`Failed to scan media file; filename="${this.configureMap.mediaPath}" err="Media metadata not found"`);
 				this.end ();
 				return;
 			}
 
-			record.duration = metadata.duration;
-			record.frameRate = metadata.frameRate;
-			record.width = metadata.width;
-			record.height = metadata.height;
-			record.bitrate = metadata.bitrate;
+			record.duration = parser.duration;
+			record.frameRate = parser.frameRate;
+			record.width = parser.width;
+			record.height = parser.height;
+			record.bitrate = parser.bitrate;
+			this.sourceParser = parser;
 			this.addPercentComplete (this.progressPercentDelta);
 			this.createThumbnails (record, createThumbnailsComplete);
 		};
@@ -164,7 +171,7 @@ class ScanMediaFile extends TaskBase {
 
 	// Execute operations as needed to prepare thumbnail images for the provided MediaItem object, and invoke the provided callback when complete, with an "err" parameter (non-null if an error occurred)
 	createThumbnails (mediaItem, endCallback) {
-		let filename, datapath, imageindex, frametime, framedelta, proc, processEnded, createNextThumbnail;
+		let datapath, proc, processEnded;
 
 		if ((this.configureMap.mediaThumbnailCount <= 0) || (mediaItem.duration <= 0)) {
 			process.nextTick (endCallback);
@@ -178,34 +185,26 @@ class ScanMediaFile extends TaskBase {
 			datapath = Path.join (datapath, "thumbnail");
 			return (FsUtil.createDirectory (datapath));
 		}).then (() => {
-			imageindex = -1;
-			framedelta = (mediaItem.duration / (this.configureMap.mediaThumbnailCount + 1));
-			frametime = -(framedelta);
-			createNextThumbnail ();
+			let fps;
+
+			this.addPercentComplete (this.progressPercentDelta);
+			fps = this.sourceParser.duration / 1000;
+			fps /= this.configureMap.mediaThumbnailCount;
+			fps = 1 / fps;
+			proc = App.systemAgent.createFfmpegProcess ([
+				"-hide_banner",
+				"-i", mediaItem.mediaPath,
+				"-vcodec", "mjpeg",
+				"-vf", `fps=${fps}`,
+				"-vframes", this.configureMap.mediaThumbnailCount,
+				"-an",
+				"-y",
+				"-start_number", "0",
+				Path.join (datapath, `%d.jpg`)
+			], datapath, null, processEnded);
 		}).catch ((err) => {
 			endCallback (err);
 		});
-
-		createNextThumbnail = () => {
-			++imageindex;
-			if (imageindex >= this.configureMap.mediaThumbnailCount) {
-				endCallback ();
-				return;
-			}
-
-			this.addPercentComplete (this.progressPercentDelta);
-			frametime += framedelta;
-			filename = Path.join (datapath, `${imageindex}.jpg`);
-			proc = App.systemAgent.createFfmpegProcess ([
-				"-i", mediaItem.mediaPath,
-				"-vcodec", "mjpeg",
-				"-vframes", "1",
-				"-an",
-				"-ss", Log.getDurationString (frametime),
-				"-y",
-				filename
-			], datapath, null, processEnded);
-		};
 
 		processEnded = () => {
 			if (proc.hasError) {
@@ -213,7 +212,7 @@ class ScanMediaFile extends TaskBase {
 				return;
 			}
 
-			createNextThumbnail ();
+			endCallback ();
 		};
 	}
 }

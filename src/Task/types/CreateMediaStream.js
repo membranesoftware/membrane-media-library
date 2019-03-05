@@ -36,7 +36,7 @@ const Path = require ("path");
 const Log = require (App.SOURCE_DIRECTORY + "/Log");
 const SystemInterface = require (App.SOURCE_DIRECTORY + "/SystemInterface");
 const FsUtil = require (App.SOURCE_DIRECTORY + "/FsUtil");
-const TranscodeOutputParser = require (App.SOURCE_DIRECTORY + "/Common/TranscodeOutputParser");
+const FfprobeJsonParser = require (App.SOURCE_DIRECTORY + "/Common/FfprobeJsonParser");
 const HlsIndexParser = require (App.SOURCE_DIRECTORY + "/Common/HlsIndexParser");
 const TaskBase = require (App.SOURCE_DIRECTORY + "/Task/TaskBase");
 
@@ -116,7 +116,7 @@ class CreateMediaStream extends TaskBase {
 
 		this.streamDataPath = "";
 		this.sourcePath = "";
-		this.sourceMetadata = { };
+		this.sourceParser = { };
 		this.destMetadata = { };
 		this.hlsMetadata = { };
 	}
@@ -196,14 +196,21 @@ class CreateMediaStream extends TaskBase {
 		});
 	}
 
-	// Return a promise that reads metadata from the source media file and stores the resulting object in this.sourceMetadata
+	// Return a promise that reads metadata from the source media file and stores the resulting parser object in this.sourceParser
 	readSourceMetadata () {
 		return (new Promise ((resolve, reject) => {
 			let parser, proc, processData, processEnded;
 
 			setTimeout (() => {
-				parser = new TranscodeOutputParser (this.sourcePath);
-				proc = App.systemAgent.createFfmpegProcess ([ "-i", this.sourcePath ], this.streamDataPath, processData, processEnded);
+				parser = new FfprobeJsonParser (this.sourcePath);
+				proc = App.systemAgent.createFfprobeProcess ([
+					"-hide_banner",
+					"-loglevel", "quiet",
+					"-i", this.sourcePath,
+					"-print_format", "json",
+					"-show_format",
+					"-show_streams"
+				], this.streamDataPath, processData, processEnded);
 			}, 0);
 
 			processData = (lines, dataParseCallback) => {
@@ -212,30 +219,18 @@ class CreateMediaStream extends TaskBase {
 			};
 
 			processEnded = () => {
-				let metadata;
-
 				if (proc.hasError) {
 					reject (Error ("Metadata read process ended with error"));
 					return;
 				}
 
-				metadata = parser.getMetadata ();
-				if (metadata.audioStreamId == "") {
-					reject (Error ("Media parse failed, audio stream ID not found"));
+				parser.close ();
+				if (! parser.isParseSuccess) {
+					reject (Error ("Media parse failed, metadata not found"));
 					return;
 				}
 
-				if (metadata.videoStreamId == "") {
-					reject (Error ("Media parse failed, video stream ID not found"));
-					return;
-				}
-
-				if ((metadata.width <= 0) || (metadata.height <= 0) || (metadata.bitrate <= 0) || (metadata.frameRate <= 0) || (metadata.duration <= 0)) {
-					reject (Error ("Media parse failed, stream details not available"));
-					return;
-				}
-
-				this.sourceMetadata = metadata;
+				this.sourceParser = parser;
 				resolve ();
 			};
 		}));
@@ -246,11 +241,13 @@ class CreateMediaStream extends TaskBase {
 		return (new Promise ((resolve, reject) => {
 			let metadata, runargs, vcodec, proc, processData, processEnded;
 
-			metadata = { };
-			for (let i in this.sourceMetadata) {
-				metadata[i] = this.sourceMetadata[i];
-			}
-
+			metadata = {
+				duration: this.sourceParser.duration,
+				bitrate: this.sourceParser.bitrate,
+				width: this.sourceParser.width,
+				height: this.sourceParser.height,
+				frameRate: this.sourceParser.frameRate
+			};
 			runargs = [ ];
 			runargs.push ("-i", this.sourcePath);
 
@@ -282,16 +279,20 @@ class CreateMediaStream extends TaskBase {
 				runargs.push ("-s", `${this.configureMap.width}x${this.configureMap.height}`);
 			}
 
-			runargs.push ("-acodec");
-			if (this.configureMap.audioCodec != "") {
-				runargs.push (this.configureMap.audioCodec);
-			}
-			else {
-				runargs.push ("aac");
+			if (this.sourceParser.audioStreamIndex !== null) {
+				runargs.push ("-acodec");
+				if (this.configureMap.audioCodec != "") {
+					runargs.push (this.configureMap.audioCodec);
+				}
+				else {
+					runargs.push ("aac");
+				}
 			}
 
-			runargs.push ("-map", metadata.videoStreamId);
-			runargs.push ("-map", metadata.audioStreamId);
+			runargs.push ("-map", `0:${this.sourceParser.videoStreamIndex}`);
+			if (this.sourceParser.audioStreamIndex !== null) {
+				runargs.push ("-map", `0:${this.sourceParser.audioStreamIndex}`);
+			}
 
 			runargs.push ("-f", "ssegment");
 			runargs.push ("-segment_list", App.STREAM_INDEX_FILENAME);

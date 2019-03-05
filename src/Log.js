@@ -214,7 +214,7 @@ exports.getDurationString = function (ms) {
 	s = '' + Math.floor (t);
 	if (s.length < 2) {
 		s = '0' + s;
- 	}
+	}
 	duration += ':' + s;
 
 	return (duration);

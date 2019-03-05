@@ -31,11 +31,12 @@
 // Functions for use in sending or receiving remote commands
 
 var SystemInterface = exports;
-SystemInterface.Version = "8-stable-f11d18e2";
+SystemInterface.Version = "10-stable-6f663484";
 SystemInterface.Command = { };
 SystemInterface.Command.AgentConfiguration = {"id":45,"name":"AgentConfiguration","paramType":"AgentConfiguration"};
 SystemInterface.Command.AgentContact = {"id":33,"name":"AgentContact","paramType":"AgentContact"};
 SystemInterface.Command.AgentStatus = {"id":1,"name":"AgentStatus","paramType":"AgentStatus"};
+SystemInterface.Command.ApplicationNews = {"id":64,"name":"ApplicationNews","paramType":"ApplicationNews"};
 SystemInterface.Command.AuthorizationRequired = {"id":62,"name":"AuthorizationRequired","paramType":"EmptyObject"};
 SystemInterface.Command.Authorize = {"id":19,"name":"Authorize","paramType":"Authorize"};
 SystemInterface.Command.AuthorizeResult = {"id":13,"name":"AuthorizeResult","paramType":"AuthorizeResult"};
@@ -93,6 +94,7 @@ SystemInterface.CommandId = { };
 SystemInterface.CommandId.AgentConfiguration = 45;
 SystemInterface.CommandId.AgentContact = 33;
 SystemInterface.CommandId.AgentStatus = 1;
+SystemInterface.CommandId.ApplicationNews = 64;
 SystemInterface.CommandId.AuthorizationRequired = 62;
 SystemInterface.CommandId.Authorize = 19;
 SystemInterface.CommandId.AuthorizeResult = 13;
@@ -150,6 +152,8 @@ SystemInterface.Type = { };
 SystemInterface.Type.AgentConfiguration = [{"name":"isEnabled","type":"boolean","flags":0},{"name":"displayName","type":"string","flags":3},{"name":"mediaServerConfiguration","type":"MediaServerConfiguration","flags":0},{"name":"streamServerConfiguration","type":"StreamServerConfiguration","flags":0},{"name":"monitorServerConfiguration","type":"MonitorServerConfiguration","flags":0}];
 SystemInterface.Type.AgentContact = [{"name":"id","type":"string","flags":35},{"name":"urlHostname","type":"string","flags":5},{"name":"tcpPort1","type":"number","flags":129,"rangeMin":0,"rangeMax":65535},{"name":"tcpPort2","type":"number","flags":129,"rangeMin":0,"rangeMax":65535},{"name":"udpPort","type":"number","flags":129,"rangeMin":0,"rangeMax":65535},{"name":"version","type":"string","flags":3},{"name":"nodeVersion","type":"string","flags":0,"defaultValue":""}];
 SystemInterface.Type.AgentStatus = [{"name":"id","type":"string","flags":35},{"name":"displayName","type":"string","flags":3},{"name":"applicationName","type":"string","flags":3},{"name":"urlHostname","type":"string","flags":5},{"name":"tcpPort1","type":"number","flags":129,"rangeMin":0,"rangeMax":65535},{"name":"tcpPort2","type":"number","flags":129,"rangeMin":0,"rangeMax":65535},{"name":"udpPort","type":"number","flags":129,"rangeMin":0,"rangeMax":65535},{"name":"linkPath","type":"string","flags":1,"defaultValue":""},{"name":"uptime","type":"string","flags":1,"defaultValue":""},{"name":"version","type":"string","flags":3},{"name":"nodeVersion","type":"string","flags":0,"defaultValue":""},{"name":"platform","type":"string","flags":0,"defaultValue":""},{"name":"isEnabled","type":"boolean","flags":1},{"name":"taskCount","type":"number","flags":17},{"name":"runCount","type":"number","flags":17},{"name":"maxRunCount","type":"number","flags":17},{"name":"mediaServerStatus","type":"MediaServerStatus","flags":0},{"name":"streamServerStatus","type":"StreamServerStatus","flags":0},{"name":"monitorServerStatus","type":"MonitorServerStatus","flags":0}];
+SystemInterface.Type.ApplicationNews = [{"name":"items","type":"array","containerType":"ApplicationNewsItem","flags":1}];
+SystemInterface.Type.ApplicationNewsItem = [{"name":"message","type":"string","flags":3},{"name":"iconType","type":"string","flags":0},{"name":"actionText","type":"string","flags":0},{"name":"actionType","type":"string","flags":0},{"name":"actionTarget","type":"string","flags":0}];
 SystemInterface.Type.Authorize = [{"name":"token","type":"string","flags":3}];
 SystemInterface.Type.AuthorizeResult = [{"name":"token","type":"string","flags":3}];
 SystemInterface.Type.CancelTask = [{"name":"taskId","type":"string","flags":35}];
@@ -199,6 +203,8 @@ SystemInterface.Type.WebDisplayIntentState = [{"name":"urls","type":"array","con
 SystemInterface.Type.AgentConfiguration.updateHash = function(p, f) {f(p.displayName);f(p.isEnabled ? "true" : "false");if((typeof p.mediaServerConfiguration == "object") && (p.mediaServerConfiguration != null)) {SystemInterface.Type.MediaServerConfiguration.updateHash(p.mediaServerConfiguration, f);}if((typeof p.monitorServerConfiguration == "object") && (p.monitorServerConfiguration != null)) {SystemInterface.Type.MonitorServerConfiguration.updateHash(p.monitorServerConfiguration, f);}if((typeof p.streamServerConfiguration == "object") && (p.streamServerConfiguration != null)) {SystemInterface.Type.StreamServerConfiguration.updateHash(p.streamServerConfiguration, f);}};
 SystemInterface.Type.AgentContact.updateHash = function(p, f) {f(p.id);if(typeof p.nodeVersion == "string") {f(p.nodeVersion);}f("" + Math.trunc (p.tcpPort1));f("" + Math.trunc (p.tcpPort2));f("" + Math.trunc (p.udpPort));f(p.urlHostname);f(p.version);};
 SystemInterface.Type.AgentStatus.updateHash = function(p, f) {f(p.applicationName);f(p.displayName);f(p.id);f(p.isEnabled ? "true" : "false");f(p.linkPath);f("" + Math.trunc (p.maxRunCount));if((typeof p.mediaServerStatus == "object") && (p.mediaServerStatus != null)) {SystemInterface.Type.MediaServerStatus.updateHash(p.mediaServerStatus, f);}if((typeof p.monitorServerStatus == "object") && (p.monitorServerStatus != null)) {SystemInterface.Type.MonitorServerStatus.updateHash(p.monitorServerStatus, f);}if(typeof p.nodeVersion == "string") {f(p.nodeVersion);}if(typeof p.platform == "string") {f(p.platform);}f("" + Math.trunc (p.runCount));if((typeof p.streamServerStatus == "object") && (p.streamServerStatus != null)) {SystemInterface.Type.StreamServerStatus.updateHash(p.streamServerStatus, f);}f("" + Math.trunc (p.taskCount));f("" + Math.trunc (p.tcpPort1));f("" + Math.trunc (p.tcpPort2));f("" + Math.trunc (p.udpPort));f(p.uptime);f(p.urlHostname);f(p.version);};
+SystemInterface.Type.ApplicationNews.updateHash = function(p, f) {for(var i = 0; i < p.items.length; ++i) {SystemInterface.Type.ApplicationNewsItem.updateHash(p.items[i], f);}};
+SystemInterface.Type.ApplicationNewsItem.updateHash = function(p, f) {if(typeof p.actionTarget == "string") {f(p.actionTarget);}if(typeof p.actionText == "string") {f(p.actionText);}if(typeof p.actionType == "string") {f(p.actionType);}if(typeof p.iconType == "string") {f(p.iconType);}f(p.message);};
 SystemInterface.Type.Authorize.updateHash = function(p, f) {f(p.token);};
 SystemInterface.Type.AuthorizeResult.updateHash = function(p, f) {f(p.token);};
 SystemInterface.Type.CancelTask.updateHash = function(p, f) {f(p.taskId);};
@@ -427,7 +433,7 @@ SystemInterface.getParamError = function (fields, type, allowUnknownKeys) {
 				break;
 			}
 			case "array": {
-				if ((typeof value != "object") || (value.length === undefined)) {
+				if ((typeof value != "object") || (value == null) || (value.length === undefined)) {
 					return ("Parameter field \"" + param.name + "\" has incorrect type \"" + typeof value + "\", expecting array");
 				}
 
@@ -532,6 +538,10 @@ SystemInterface.getParamError = function (fields, type, allowUnknownKeys) {
 
 					for (j = 0; j < value.length; ++j) {
 						item = value[j];
+						if (item == null) {
+							return ("Parameter field \"" + param.name + "\" has object array with invalid items");
+						}
+
 						err = SystemInterface.getParamError (item, paramtype, allowUnknownKeys);
 						if (SystemInterface.isError (err)) {
 							return ("Array parameter \"" + param.name + "[" + j + "]\": " + err);
@@ -544,6 +554,10 @@ SystemInterface.getParamError = function (fields, type, allowUnknownKeys) {
 			case "map": {
 				if (typeof value != "object") {
 					return ("Parameter field \"" + param.name + "\" has incorrect type \"" + typeof value + "\", expecting object");
+				}
+
+				if (value == null) {
+					return ("Parameter field \"" + param.name + "\" has null object");
 				}
 
 				containertype = param.containerType;
@@ -661,7 +675,11 @@ SystemInterface.getParamError = function (fields, type, allowUnknownKeys) {
 					return ("Parameter field \"" + param.name + "\" has incorrect type \"" + typeof value + "\", expecting object");
 				}
 
-				if ((param.flags & SystemInterface.ParamFlag.Command) && (value != null)) {
+				if (value == null) {
+					return ("Parameter field \"" + param.name + "\" has null object");
+				}
+
+				if (param.flags & SystemInterface.ParamFlag.Command) {
 					err = SystemInterface.parseCommand (value);
 					if (SystemInterface.isError (err)) {
 						return ("Parameter field \"" + param.name + "\": " + err);
@@ -734,8 +752,11 @@ SystemInterface.parseCommand = function (command, typeFields) {
 		return (err);
 	}
 
-	if (typeof command.commandType != 'number') {
-		command.commandType = 0;
+	if ((typeof command.prefix != "object") || (command.prefix == null)) {
+		command.prefix = { };
+	}
+	if (typeof command.commandType != "number") {
+		command.commandType = SystemInterface.Constant.DefaultCommandType;
 	}
 
 	return (command);
@@ -751,10 +772,12 @@ SystemInterface.populateDefaultFields = function (fields, type) {
 			containertype = SystemInterface.Type[param.containerType];
 			if (containertype != null) {
 				value = fields[param.name];
-				if ((typeof value == "object") && (value.length !== undefined)) {
+				if ((typeof value == "object") && (value != null) && (value.length !== undefined)) {
 					for (j = 0; j < value.length; ++j) {
 						item = value[j];
-						SystemInterface.populateDefaultFields (item, containertype);
+						if (item != null) {
+							SystemInterface.populateDefaultFields (item, containertype);
+						}
 					}
 				}
 			}
@@ -763,10 +786,12 @@ SystemInterface.populateDefaultFields = function (fields, type) {
 			containertype = SystemInterface.Type[param.containerType];
 			if (containertype != null) {
 				value = fields[param.name];
-				if (typeof value == "object") {
+				if ((typeof value == "object") && (value != null)) {
 					for (j in value) {
 						item = value[j];
-						SystemInterface.populateDefaultFields (item, containertype);
+						if (item != null) {
+							SystemInterface.populateDefaultFields (item, containertype);
+						}
 					}
 				}
 			}

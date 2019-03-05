@@ -164,10 +164,7 @@ class SystemAgent {
 			serverconfigs = [ ];
 		}
 		if (serverconfigs.length <= 0) {
-			process.nextTick (() => {
-				startCompleteCallback ("No server types configured");
-			});
-			return;
+			Log.notice ("No server types configured, remote functionality may be limited");
 		}
 
 		for (let config of serverconfigs) {
@@ -1998,6 +1995,28 @@ class SystemAgent {
 			}
 			else {
 				runpath = "ffmpeg";
+			}
+		}
+
+		return (new ExecProcess (runpath, runArgs, env, workingPath, processData, processEnded));
+	}
+
+	// Return a newly created ExecProcess object that launches ffprobe. workingPath defaults to the application data directory if empty.
+	createFfprobeProcess (runArgs, workingPath, processData, processEnded) {
+		let runpath, env;
+
+		runpath = App.FFMPEG_PATH;
+		env = { };
+		if (runpath == "") {
+			if (process.platform == "win32") {
+				runpath = "ffmpeg/bin/ffprobe.exe";
+			}
+			else if (process.platform == "linux") {
+				runpath = "ffmpeg/ffprobe";
+				env.LD_LIBRARY_PATH = App.BIN_DIRECTORY + "/ffmpeg/lib";
+			}
+			else {
+				runpath = "ffprobe";
 			}
 		}
 

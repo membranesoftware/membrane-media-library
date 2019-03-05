@@ -44,7 +44,6 @@ const RepeatTask = require (App.SOURCE_DIRECTORY + "/RepeatTask");
 const SystemInterface = require (App.SOURCE_DIRECTORY + "/SystemInterface");
 const Task = require (App.SOURCE_DIRECTORY + "/Task/Task");
 const ServerBase = require (App.SOURCE_DIRECTORY + "/Server/ServerBase");
-const TranscodeOutputParser = require (App.SOURCE_DIRECTORY + "/Common/TranscodeOutputParser");
 
 const GET_FILE_PATH = "/mediaserver/getfile";
 const THUMBNAIL_PATH = "/mediaserver/thumbnail.jpg";
