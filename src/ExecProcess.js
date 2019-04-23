@@ -39,8 +39,15 @@ const Log = require (App.SOURCE_DIRECTORY + "/Log");
 const STOP_SIGNAL_REPEAT_DELAY = 4800; // milliseconds
 
 class ExecProcess {
-	// execPath is the path to the binary to run, execArgs is an array containing command line arguments for the child process, envParams is an object containing environment variables for the child process, workingPath is the path to the working directory for process execution (defaults to the application data directory if empty), dataCallback is a function that should be called each time a set of lines is parsed (invoked with an array of strings and a callback), and endCallback is a function that should be called when the process ends.
+	// execPath is the path to the binary to run, execArgs is an array containing command line arguments for the child process, envParams is an object containing environment variables for the child process, workingPath is the path to the working directory for process execution (defaults to the application data directory if empty), dataCallback is a function that should be called each time a set of lines is parsed (invoked with an array of strings and a callback), and endCallback is a function that should be called when the process ends (invoked with err and isExitSuccess parameters).
 	constructor (execPath, execArgs, envParams, workingPath, dataCallback, endCallback) {
+		// Read-only data members
+		this.isPaused = false;
+		this.isEnded = false;
+		this.exitCode = -1;
+		this.exitSignal = "";
+		this.isExitSuccess = false;
+
 		this.execPath = execPath;
 		if (this.execPath.indexOf ("/") !== 0) {
 			this.execPath = App.BIN_DIRECTORY + "/" + this.execPath;
@@ -63,9 +70,6 @@ class ExecProcess {
 
 		this.dataCallback = dataCallback;
 		this.endCallback = endCallback;
-		this.hasError = false;
-		this.isPaused = false;
-		this.isEnded = false;
 		this.process = null;
 		this.runProcess ();
 	}
@@ -83,10 +87,9 @@ class ExecProcess {
 		catch (err) {
 			Log.err (`Failed to launch child process; execPath=${this.execPath} execArgs=${JSON.stringify (this.execArgs)} workingPath=${this.workingPath} env=${JSON.stringify (this.envParams)} err=${err}\n${err.stack}`);
 
-			this.hasError = true;
 			if (this.endCallback != null) {
 				setTimeout (() => {
-					this.endCallback ();
+					this.endCallback (err, false);
 				}, 0);
 			}
 			return;
@@ -94,6 +97,9 @@ class ExecProcess {
 		this.process = proc;
 		endcount = 0;
 		this.isEnded = false;
+		this.exitCode = -1;
+		this.exitSignal = "";
+		this.isExitSuccess = false;
 		this.readLineCount = 0;
 		this.readByteCount = 0;
 		this.stdoutBuffer = "";
@@ -127,25 +133,27 @@ class ExecProcess {
 
 		proc.on ("error", (err) => {
 			Log.err (`[ExecProcess ${proc.pid}] process error; execPath=${this.execPath} err=${err}`);
-			this.hasError = true;
-			endRun ();
+			endRun (err);
 		});
 
 		proc.on ("close", (code, signal) => {
+			this.exitCode = code;
+			this.exitSignal = (typeof signal == "string") ? signal : "";
+			this.isExitSuccess = (this.exitCode == 0);
 			++endcount;
 			if (endcount >= 3) {
 				endRun ();
 			}
 		});
 
-		endRun = () => {
+		endRun = (err) => {
 			if (this.isEnded) {
 				return;
 			}
 			this.isEnded = true;
-			if (this.hasError) {
+			if (err != null) {
 				if (this.endCallback != null) {
-					this.endCallback ();
+					this.endCallback (err, this.isExitSuccess);
 					this.endCallback = null;
 				}
 				return;
@@ -190,16 +198,11 @@ class ExecProcess {
 
 			if (this.isEnded) {
 				if (this.endCallback != null) {
-					this.endCallback ();
+					this.endCallback (null, this.isExitSuccess);
 					this.endCallback = null;
 				}
 			}
 		};
-
-		if (this.hasError) {
-			endParse ();
-			return;
-		}
 
 		lines = [ ];
 		while (true) {

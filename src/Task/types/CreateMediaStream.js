@@ -36,9 +36,12 @@ const Path = require ("path");
 const Log = require (App.SOURCE_DIRECTORY + "/Log");
 const SystemInterface = require (App.SOURCE_DIRECTORY + "/SystemInterface");
 const FsUtil = require (App.SOURCE_DIRECTORY + "/FsUtil");
-const FfprobeJsonParser = require (App.SOURCE_DIRECTORY + "/Common/FfprobeJsonParser");
-const HlsIndexParser = require (App.SOURCE_DIRECTORY + "/Common/HlsIndexParser");
+const FfprobeJsonParser = require (App.SOURCE_DIRECTORY + "/FfprobeJsonParser");
+const HlsIndexParser = require (App.SOURCE_DIRECTORY + "/HlsIndexParser");
 const TaskBase = require (App.SOURCE_DIRECTORY + "/Task/TaskBase");
+
+const DEFAULT_VIDEO_CODEC = "libx264";
+const DEFAULT_AUDIO_CODEC = "aac";
 
 class CreateMediaStream extends TaskBase {
 	constructor () {
@@ -80,37 +83,23 @@ class CreateMediaStream extends TaskBase {
 				description: "The path to use for storage of media data"
 			},
 			{
-				name: "audioCodec",
-				type: "string",
-				flags: SystemInterface.ParamFlag.Required,
-				description: "The audio codec to use for the transcode operation, or an empty value to choose a default codec",
-				defaultValue: ""
-			},
-			{
-				name: "videoCodec",
-				type: "string",
-				flags: SystemInterface.ParamFlag.Required,
-				description: "The video codec to use for the transcode operation, or an empty value to choose a default codec",
-				defaultValue: ""
-			},
-			{
-				name: "width",
+				name: "mediaWidth",
 				type: "number",
 				flags: SystemInterface.ParamFlag.GreaterThanZero,
-				description: "The frame width of the stream to create, if different from the original"
+				description: "The frame width of the source video"
 			},
 			{
-				name: "height",
+				name: "mediaHeight",
 				type: "number",
 				flags: SystemInterface.ParamFlag.GreaterThanZero,
-				description: "The frame height of the stream to create, if different from the original"
+				description: "The frame height of the source video"
 			},
 			{
-				name: "h264Preset",
-				type: "string",
-				flags: SystemInterface.ParamFlag.EnumValue,
-				enumValues: [ "ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow" ],
-				description: "The preset value that should be applied for H.264 video encoding"
+				name: "profile",
+				type: "number",
+				flags: SystemInterface.ParamFlag.Required | SystemInterface.ParamFlag.ZeroOrGreater,
+				description: "The profile type to use for encoding the stream",
+				defaultValue: 0
 			}
 		];
 
@@ -145,19 +134,80 @@ class CreateMediaStream extends TaskBase {
 		}).then (() => {
 			return (FsUtil.createDirectory (Path.join (this.streamDataPath, App.STREAM_HLS_PATH)));
 		}).then (() => {
+			return (FsUtil.createDirectory (Path.join (this.streamDataPath, App.STREAM_DASH_PATH)));
+		}).then (() => {
 			return (this.readSourceMetadata ());
 		}).then (() => {
+			let w, h, vb;
+
+			this.destMetadata = {
+				duration: this.sourceParser.duration
+			};
+
+			this.destMetadata.frameRate = this.sourceParser.frameRate;
+			if (this.destMetadata.frameRate > 29.97) {
+				this.destMetadata.frameRate = 29.97;
+			}
+
+			w = this.configureMap.mediaWidth;
+			h = this.configureMap.mediaHeight;
+			vb = this.sourceParser.videoBitrate;
+			switch (this.configureMap.profile) {
+				case SystemInterface.Constant.LowQualityStreamProfile: {
+					w = Math.floor (w / 2);
+					h = Math.floor (h / 2);
+					w -= (w % 16);
+					h -= (h % 16);
+					if (w < 1) {
+						w = 1;
+					}
+					if (h < 1) {
+						h = 1;
+					}
+
+					vb = Math.floor (vb / 2);
+					if (vb < 1024) {
+						vb = 1024;
+					}
+					break;
+				}
+				case SystemInterface.Constant.LowestQualityStreamProfile: {
+					w = Math.floor (w / 4);
+					h = Math.floor (h / 4);
+					w -= (w % 16);
+					h -= (h % 16);
+					if (w < 1) {
+						w = 1;
+					}
+					if (h < 1) {
+						h = 1;
+					}
+
+					vb = Math.floor (vb / 4);
+					if (vb < 1024) {
+						vb = 1024;
+					}
+					break;
+				}
+				default: {
+					break;
+				}
+			}
+			this.destMetadata.width = w;
+			this.destMetadata.height = h;
+			this.destMetadata.videoBitrate = vb;
+
+			this.destMetadata.bitrate = this.sourceParser.bitrate;
+			this.destMetadata.bitrate -= (this.sourceParser.videoBitrate - vb);
+			if (this.destMetadata.bitrate < 1024) {
+				this.destMetadata.bitrate = 1024;
+			}
+
 			this.addPercentComplete (1);
-			return (this.transcodeMedia ());
+			return (this.transcodeHlsStream ());
 		}).then (() => {
-			return (this.computeStreamSize ());
-		}).then ((streamSize) => {
-			if ((typeof this.destMetadata.duration == "number") && (this.destMetadata.duration >= 1)) {
-				this.destMetadata.bitrate = streamSize / (this.destMetadata.duration / 1000);
-			}
-			else {
-				this.destMetadata.bitrate = streamSize;
-			}
+			return (this.transcodeDashStream ());
+		}).then (() => {
 			return (this.createThumbnails ());
 		}).then (() => {
 			return (this.readHlsMetadata ());
@@ -176,12 +226,14 @@ class CreateMediaStream extends TaskBase {
 				size: streamSize,
 				bitrate: this.destMetadata.bitrate,
 				frameRate: this.destMetadata.frameRate,
+				profile: this.configureMap.profile,
 				hlsTargetDuration: this.hlsMetadata.hlsTargetDuration,
 				segmentCount: this.hlsMetadata.segmentCount,
 				segmentFilenames: this.hlsMetadata.segmentFilenames,
 				segmentLengths: this.hlsMetadata.segmentLengths,
 				segmentPositions: this.hlsMetadata.segmentPositions
 			};
+
 			streamitem = SystemInterface.parseTypeObject ("StreamItem", params);
 			if (SystemInterface.isError (streamitem)) {
 				return (Promise.reject (Error ("Failed to store stream metadata, " + streamitem)));
@@ -218,9 +270,9 @@ class CreateMediaStream extends TaskBase {
 				process.nextTick (dataParseCallback);
 			};
 
-			processEnded = () => {
-				if (proc.hasError) {
-					reject (Error ("Metadata read process ended with error"));
+			processEnded = (err) => {
+				if (err != null) {
+					reject (err);
 					return;
 				}
 
@@ -236,74 +288,37 @@ class CreateMediaStream extends TaskBase {
 		}));
 	}
 
-	// Return a promise that executes the media transcode operation
-	transcodeMedia () {
+	// Return a promise that executes the HLS transcode operation
+	transcodeHlsStream () {
 		return (new Promise ((resolve, reject) => {
-			let metadata, runargs, vcodec, proc, processData, processEnded;
+			let args, vcodec, proc, processData, processEnded;
 
-			metadata = {
-				duration: this.sourceParser.duration,
-				bitrate: this.sourceParser.bitrate,
-				width: this.sourceParser.width,
-				height: this.sourceParser.height,
-				frameRate: this.sourceParser.frameRate
-			};
-			runargs = [ ];
-			runargs.push ("-i", this.sourcePath);
+			// TODO: Possibly assign a different video codec (defaulting to libx264)
+			vcodec = DEFAULT_VIDEO_CODEC;
 
-			runargs.push ("-vcodec");
-			if (this.configureMap.videoCodec != "") {
-				vcodec = this.configureMap.videoCodec;
-			}
-			else {
-				vcodec = "libx264";
-			}
-			runargs.push (vcodec);
+			args = [ ];
+			args.push ("-i", this.sourcePath);
 
-			if (vcodec == "libx264") {
-				runargs.push ("-preset");
-				if (typeof this.configureMap.h264Preset == "string") {
-					runargs.push (this.configureMap.h264Preset);
-				}
-				else {
-					runargs.push ("ultrafast");
-				}
-			}
-			if (metadata.frameRate > 29.97) {
-				metadata.frameRate = 29.97;
-				runargs.push ("-r", "29.97");
-			}
-			if ((typeof this.configureMap.width == "number") && (typeof this.configureMap.height == "number")) {
-				metadata.width = this.configureMap.width;
-				metadata.height = this.configureMap.height;
-				runargs.push ("-s", `${this.configureMap.width}x${this.configureMap.height}`);
-			}
+			this.addVideoProfileArguments (vcodec, args);
 
 			if (this.sourceParser.audioStreamIndex !== null) {
-				runargs.push ("-acodec");
-				if (this.configureMap.audioCodec != "") {
-					runargs.push (this.configureMap.audioCodec);
-				}
-				else {
-					runargs.push ("aac");
-				}
+				// TODO: Possibly assign a different audio codec (defaulting to aac)
+				args.push ("-acodec", DEFAULT_AUDIO_CODEC);
 			}
 
-			runargs.push ("-map", `0:${this.sourceParser.videoStreamIndex}`);
+			args.push ("-map", `0:${this.sourceParser.videoStreamIndex}`);
 			if (this.sourceParser.audioStreamIndex !== null) {
-				runargs.push ("-map", `0:${this.sourceParser.audioStreamIndex}`);
+				args.push ("-map", `0:${this.sourceParser.audioStreamIndex}`);
 			}
 
-			runargs.push ("-f", "ssegment");
-			runargs.push ("-segment_list", App.STREAM_INDEX_FILENAME);
-			runargs.push ("-segment_list_flags", "live");
-			runargs.push ("-segment_time", "2");
-			runargs.push ("%05d.ts");
-
-			this.destMetadata = metadata;
+			args.push ("-f", "ssegment");
+			args.push ("-segment_list", App.STREAM_HLS_INDEX_FILENAME);
+			args.push ("-segment_list_flags", "live");
+			args.push ("-segment_time", "2");
+			args.push ("%05d.ts");
 
 			setTimeout (() => {
-				proc = App.systemAgent.createFfmpegProcess (runargs, Path.join (this.streamDataPath, App.STREAM_HLS_PATH), processData, processEnded);
+				proc = App.systemAgent.createFfmpegProcess (args, Path.join (this.streamDataPath, App.STREAM_HLS_PATH), processData, processEnded);
 			}, 0);
 
 			processData = (lines, dataParseCallback) => {
@@ -314,9 +329,73 @@ class CreateMediaStream extends TaskBase {
 				process.nextTick (dataParseCallback);
 			};
 
-			processEnded = () => {
-				if (proc.hasError) {
-					reject (Error ("HLS transcode process ended with error"));
+			processEnded = (err, isExitSuccess) => {
+				if (err != null) {
+					reject (err);
+					return;
+				}
+
+				if (! isExitSuccess) {
+					reject (Error ("HLS transcode process failed"));
+					return;
+				}
+				if (this.getPercentComplete () < 50) {
+					this.setPercentComplete (50);
+				}
+				resolve ();
+			}
+		}));
+	}
+
+	transcodeDashStream () {
+		return (new Promise ((resolve, reject) => {
+			let args, vcodec, proc, processData, processEnded;
+
+			// TODO: Possibly assign a different video codec (defaulting to libx264)
+			vcodec = DEFAULT_VIDEO_CODEC;
+
+			args = [ ];
+			args.push ("-i", this.sourcePath);
+
+			this.addVideoProfileArguments (vcodec, args);
+
+			if (this.sourceParser.audioStreamIndex !== null) {
+				args.push ("-acodec");
+
+				// TODO: Possibly assign a different audio codec (defaulting to aac)
+				args.push (DEFAULT_AUDIO_CODEC);
+			}
+
+			args.push ("-map", `0:${this.sourceParser.videoStreamIndex}`);
+			if (this.sourceParser.audioStreamIndex !== null) {
+				args.push ("-map", `0:${this.sourceParser.audioStreamIndex}`);
+			}
+
+			args.push ("-f", "dash");
+			args.push ("-adaptation_sets", "id=0,streams=v id=1,streams=a");
+			args.push ("-use_template", "1");
+			args.push (App.STREAM_DASH_DESCRIPTION_FILENAME);
+
+			setTimeout (() => {
+				proc = App.systemAgent.createFfmpegProcess (args, Path.join (this.streamDataPath, App.STREAM_DASH_PATH), processData, processEnded);
+			}, 0);
+
+			processData = (lines, dataParseCallback) => {
+
+				if (this.getPercentComplete () < 50) {
+					this.addPercentComplete (1);
+				}
+				process.nextTick (dataParseCallback);
+			};
+
+			processEnded = (err, isExitSuccess) => {
+				if (err != null) {
+					reject (err);
+					return;
+				}
+
+				if (! isExitSuccess) {
+					reject (Error ("DASH transcode process failed"));
 					return;
 				}
 				if (this.getPercentComplete () < 50) {
@@ -330,8 +409,9 @@ class CreateMediaStream extends TaskBase {
 	// Return a promise that generates thumbnail images from HLS transcode output
 	createThumbnails () {
 		return (new Promise ((resolve, reject) => {
-			let segmentfiles, segmentindex, proc, createNextThumbnail, processEnded;
+			let segmentfiles, segmentindex, proc, createNextThumbnail, processEnded, copyComplete, curthumbfile, lastthumbfile;
 
+			lastthumbfile = "";
 			FsUtil.readDirectory (Path.join (this.streamDataPath, App.STREAM_HLS_PATH)).then ((files) => {
 				segmentfiles = [ ];
 				for (let file of files) {
@@ -356,19 +436,40 @@ class CreateMediaStream extends TaskBase {
 					return;
 				}
 
+				curthumbfile = Path.join (this.streamDataPath, App.STREAM_THUMBNAIL_PATH, segmentfiles[segmentindex] + ".jpg");
 				proc = App.systemAgent.createFfmpegProcess ([
 					"-i", Path.join (this.streamDataPath, App.STREAM_HLS_PATH, segmentfiles[segmentindex]),
 					"-vcodec", "mjpeg",
 					"-vframes", "1",
 					"-an",
 					"-y",
-					Path.join (this.streamDataPath, App.STREAM_THUMBNAIL_PATH, segmentfiles[segmentindex] + ".jpg"),
+					curthumbfile
 				], Path.join (this.streamDataPath, App.STREAM_HLS_PATH), null, processEnded);
 			};
 
-			processEnded = () => {
-				if (proc.hasError) {
-					reject (Error ("Thumbnail process ended with error"));
+			processEnded = (err, isExitSuccess) => {
+				if (err != null) {
+					reject (err);
+					return;
+				}
+
+				if (! isExitSuccess) {
+					if (lastthumbfile == "") {
+						reject (Error ("Failed to generate thumbnail image"));
+						return;
+					}
+
+					Fs.copyFile (lastthumbfile, curthumbfile, 0, copyComplete);
+					return;
+				}
+
+				lastthumbfile = curthumbfile;
+				copyComplete ();
+			};
+
+			copyComplete = (err) => {
+				if (err != null) {
+					reject (err);
 					return;
 				}
 
@@ -383,7 +484,7 @@ class CreateMediaStream extends TaskBase {
 	// Return a promise that reads metadata from the HLS transcode output and stores the resulting object in this.hlsMetadata
 	readHlsMetadata () {
 		return (new Promise ((resolve, reject) => {
-			Fs.readFile (Path.join (this.streamDataPath, App.STREAM_HLS_PATH, App.STREAM_INDEX_FILENAME), (err, data) => {
+			Fs.readFile (Path.join (this.streamDataPath, App.STREAM_HLS_PATH, App.STREAM_HLS_INDEX_FILENAME), (err, data) => {
 				let metadata;
 
 				if (err != null) {
@@ -444,6 +545,34 @@ class CreateMediaStream extends TaskBase {
 		}
 		FsUtil.removeDirectory (this.streamDataPath, (err) => {
 		});
+	}
+
+	// Add items to an ffmpeg args array, as appropriate for the specified codec and the configured video profile
+	addVideoProfileArguments (codec, args) {
+		args.push ("-vcodec", codec);
+		if (codec == "libx264") {
+			switch (this.configureMap.profile) {
+				case SystemInterface.Constant.CompressedStreamProfile: {
+					args.push ("-preset", "slower");
+					break;
+				}
+				case SystemInterface.Constant.LowQualityStreamProfile: {
+					args.push ("-preset", "medium");
+					break;
+				}
+				case SystemInterface.Constant.LowestQualityStreamProfile: {
+					args.push ("-preset", "medium");
+					break;
+				}
+				default: {
+					args.push ("-preset", "faster");
+					break;
+				}
+			}
+		}
+		args.push ("-b:v", this.destMetadata.videoBitrate);
+		args.push ("-s", `${this.destMetadata.width}x${this.destMetadata.height}`);
+		args.push ("-r", this.destMetadata.frameRate);
 	}
 }
 

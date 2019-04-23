@@ -35,7 +35,8 @@ const Util = require ("util");
 const Fs = require ("fs");
 const Path = require ("path");
 const Async = require ("async");
-const UuidV4 = require ("uuid/v4");
+const Url = require ("url");
+const QueryString = require ("querystring");
 const Result = require (App.SOURCE_DIRECTORY + "/Result");
 const Log = require (App.SOURCE_DIRECTORY + "/Log");
 const FsUtil = require (App.SOURCE_DIRECTORY + "/FsUtil");
@@ -44,9 +45,13 @@ const RepeatTask = require (App.SOURCE_DIRECTORY + "/RepeatTask");
 const Task = require (App.SOURCE_DIRECTORY + "/Task/Task");
 const ServerBase = require (App.SOURCE_DIRECTORY + "/Server/ServerBase");
 
+const WEBROOT_PATH = "/streamserver";
 const HLS_STREAM_PATH = "/streamserver/hls/index.m3u8";
 const HLS_SEGMENT_PATH = "/streamserver/hls/segment.ts";
 const HLS_HTML5_PATH = "/streamserver/hls.html";
+const DASH_HTML5_PATH = "/streamserver/play";
+const DASH_MPD_PATH = "/streamserver/dash.mpd";
+const DASH_SEGMENT_PATH = "/streamserver/segment.m4s";
 const THUMBNAIL_PATH = "/streamserver/thumbnail.png";
 const GET_DISK_SPACE_PERIOD = 7 * 60 * 1000; // milliseconds
 
@@ -89,8 +94,8 @@ class StreamServer extends ServerBase {
 					case SystemInterface.CommandId.GetStatus: {
 						return (this.getStatus ());
 					}
-					case SystemInterface.CommandId.CreateMediaStream: {
-						return (this.createMediaStream (cmdInv));
+					case SystemInterface.CommandId.ConfigureMediaStream: {
+						return (this.configureMediaStream (cmdInv));
 					}
 					case SystemInterface.CommandId.RemoveStream: {
 						return (this.removeStream (cmdInv));
@@ -148,19 +153,6 @@ class StreamServer extends ServerBase {
 				}
 			});
 
-			App.systemAgent.addSecondaryRequestHandler ("/" + HLS_SEGMENT_PATH, (cmdInv, request, response) => {
-				switch (cmdInv.command) {
-					case SystemInterface.CommandId.GetHlsSegment: {
-						this.handleGetHlsSegmentRequest (cmdInv, request, response);
-						break;
-					}
-					default: {
-						App.systemAgent.endRequest (request, response, 400, "Bad request");
-						break;
-					}
-				}
-			});
-
 			App.systemAgent.addSecondaryRequestHandler (HLS_HTML5_PATH, (cmdInv, request, response) => {
 				switch (cmdInv.command) {
 					case SystemInterface.CommandId.GetHlsHtml5Interface: {
@@ -173,6 +165,38 @@ class StreamServer extends ServerBase {
 					}
 				}
 			});
+
+			App.systemAgent.addSecondaryRequestHandler (DASH_HTML5_PATH, (cmdInv, request, response) => {
+				switch (cmdInv.command) {
+					case SystemInterface.CommandId.GetDashHtml5Interface: {
+						this.handleGetDashHtml5InterfaceRequest (cmdInv, request, response);
+						break;
+					}
+					default: {
+						App.systemAgent.endRequest (request, response, 400, "Bad request");
+						break;
+					}
+				}
+			});
+
+			App.systemAgent.addSecondaryRequestHandler (DASH_MPD_PATH, (cmdInv, request, response) => {
+				switch (cmdInv.command) {
+					case SystemInterface.CommandId.GetDashMpd: {
+						this.handleGetDashMpdRequest (cmdInv, request, response);
+						break;
+					}
+					default: {
+						App.systemAgent.endRequest (request, response, 400, "Bad request");
+						break;
+					}
+				}
+			});
+
+			App.systemAgent.addSecondaryRequestHandler (DASH_SEGMENT_PATH, (cmdInv, request, response) => {
+				this.handleGetDashSegmentRequest (request, response);
+			});
+
+			App.systemAgent.addWebroot (WEBROOT_PATH, WEBROOT_PATH);
 
 			App.systemAgent.runDataStore (() => {
 				this.readRecords ();
@@ -217,7 +241,12 @@ class StreamServer extends ServerBase {
 
 	// Execute operations to read records from the data store and replace the contents of streamMap
 	readRecords () {
-		App.systemAgent.openDataStore ().then ((ds) => {
+		let ds;
+
+		App.systemAgent.openDataStore ().then ((dataStore) => {
+			ds = dataStore;
+			return (this.createIndexes (ds));
+		}).then (() => {
 			let crit;
 
 			crit = {
@@ -229,6 +258,7 @@ class StreamServer extends ServerBase {
 
 			recordmap = { };
 			for (let record of records) {
+				SystemInterface.populateDefaultFields (record.params, SystemInterface.Type[record.commandName]);
 				recordmap[record.params.id] = record;
 			}
 
@@ -238,6 +268,44 @@ class StreamServer extends ServerBase {
 		}).catch ((err) => {
 			Log.err (`${this.toString ()} failed to read data store records; err=${err}`);
 		});
+	}
+
+	// Return a promise that creates DataStore indexes for use in manipulating records
+	createIndexes (ds) {
+		return (new Promise ((resolve, reject) => {
+			let indexes, obj, doCreate, endSeries;
+			indexes = [
+				{ command: 1 },
+				{ command: 1, commandType: 1 }
+			];
+			obj = { };
+			obj["prefix." + SystemInterface.Constant.AgentIdPrefixField] = 1;
+			indexes.push (obj);
+
+			obj = { };
+			obj["params.id"] = 1;
+			indexes.push (obj);
+
+			obj = { };
+			obj["params.name"] = 1;
+			indexes.push (obj);
+
+			setTimeout (() => {
+				Async.eachSeries (indexes, doCreate, endSeries);
+			}, 0);
+
+			doCreate = (index, callback) => {
+				ds.createIndex (index, { }, callback);
+			};
+
+			endSeries = (err) => {
+				if (err != null) {
+					reject (Error (err));
+					return;
+				}
+				resolve ();
+			};
+		}));
 	}
 
 	// Execute operations to verify the presence of files required for each item in the stream map
@@ -261,7 +329,7 @@ class StreamServer extends ServerBase {
 			item = items[itemindex];
 			datapath = Path.join (this.configureMap.dataPath, item.params.id);
 			filenames = [ ];
-			filenames.push (Path.join (datapath, App.STREAM_HLS_PATH, App.STREAM_INDEX_FILENAME));
+			filenames.push (Path.join (datapath, App.STREAM_HLS_PATH, App.STREAM_HLS_INDEX_FILENAME));
 			for (let i = 0; i < item.params.segmentFilenames.length; ++i) {
 				filenames.push (Path.join (datapath, App.STREAM_HLS_PATH, item.params.segmentFilenames[i]));
 				filenames.push (Path.join (datapath, App.STREAM_THUMBNAIL_PATH, item.params.segmentFilenames[i] + ".jpg"));
@@ -350,7 +418,6 @@ class StreamServer extends ServerBase {
 				searchKey: cmdInv.params.searchKey,
 				resultOffset: cmdInv.params.resultOffset
 			};
-
 			return (ds.countRecords (crit));
 		}).then ((recordCount) => {
 			let max, skip;
@@ -365,6 +432,11 @@ class StreamServer extends ServerBase {
 			}
 
 			findresult.setSize = recordCount;
+			if (recordCount <= 0) {
+				client.emit (SystemInterface.Constant.WebSocketEvent, this.createCommand ("FindMediaResult", SystemInterface.Constant.Stream, findresult));
+				return;
+			}
+
 			ds.findRecords (findCallback, crit, sort, max, skip);
 		}).catch ((err) => {
 			Log.err (`${this.toString ()} FindItems command failed to execute; err=${err}`);
@@ -385,15 +457,15 @@ class StreamServer extends ServerBase {
 			}
 
 			if (record != null) {
+				SystemInterface.populateDefaultFields (record.params, SystemInterface.Type[record.commandName]);
 				client.emit (SystemInterface.Constant.WebSocketEvent, record);
 			}
 		};
 	}
 
-	// Execute a CreateMediaStream command and return a command invocation result
-	createMediaStream (cmdInv) {
-		let mediapath, mediaserver, mediaitem, streamid, params, task;
-
+	// Execute a ConfigureMediaStream command and return a command invocation result
+	configureMediaStream (cmdInv) {
+		let mediapath, mediaserver, mediaitem, streamid, removelist, match, params, task;
 		mediapath = "";
 		if (cmdInv.params.mediaServerAgentId == App.systemAgent.agentId) {
 			mediaserver = App.systemAgent.getServer ("MediaServer");
@@ -414,21 +486,36 @@ class StreamServer extends ServerBase {
 			}));
 		}
 
+		removelist = [ ];
+		match = false;
+		for (let item of Object.values (this.streamMap)) {
+			if (item.params.sourceId == cmdInv.params.mediaId) {
+				if (item.params.profile == cmdInv.params.profile) {
+					match = true;
+					break;
+				}
+
+				removelist.push (item);
+			}
+		}
+		if (match) {
+			return (this.createCommand ("CommandResult", SystemInterface.Constant.Stream, {
+				success: true
+			}));
+		}
+		this.pruneStreamItems (removelist);
+
 		streamid = App.systemAgent.getUuid (SystemInterface.CommandId.StreamItem);
 		params = {
 			streamId: streamid,
-			streamName: cmdInv.params.name,
+			streamName: cmdInv.params.streamName,
 			mediaId: cmdInv.params.mediaId,
 			mediaPath: mediapath,
-			dataPath: this.configureMap.dataPath
+			dataPath: this.configureMap.dataPath,
+			mediaWidth: cmdInv.params.mediaWidth,
+			mediaHeight: cmdInv.params.mediaHeight,
+			profile: cmdInv.params.profile
 		};
-		if (typeof cmdInv.params.h264Preset == "string") {
-			params.h264Preset = cmdInv.params.h264Preset;
-		}
-		if ((typeof cmdInv.params.width == "number") && (typeof cmdInv.params.height == "number")) {
-			params.width = cmdInv.params.width;
-			params.height = cmdInv.params.height;
-		}
 		task = Task.createTask ("CreateMediaStream", params);
 		if (task == null) {
 			return (this.createCommand ("CommandResult", SystemInterface.Constant.Stream, {
@@ -439,7 +526,6 @@ class StreamServer extends ServerBase {
 
 		App.systemAgent.runTask (task, (task) => {
 			let record;
-
 			if (task.isSuccess) {
 				App.systemAgent.openDataStore ().then ((ds) => {
 					record = this.createCommand ("StreamItem", SystemInterface.Constant.Stream, task.resultObject);
@@ -505,6 +591,146 @@ class StreamServer extends ServerBase {
 		html += "</body></html>";
 		response.setHeader ("Content-Type", "text/html");
 		App.systemAgent.endRequest (request, response, 200, html);
+	}
+
+	// Handle a request with a GetDashHtml5Interface command
+	handleGetDashHtml5InterfaceRequest (cmdInv, request, response) {
+		let item, html, cmd, mpdurl;
+
+		item = this.streamMap[cmdInv.params.streamId];
+		if (item == null) {
+			App.systemAgent.endRequest (request, response, 404, "Not found");
+			return;
+		}
+
+		cmd = this.createCommand ("GetDashMpd", SystemInterface.Constant.Stream, {
+			streamId: cmdInv.params.streamId
+		});
+		if (cmd == null) {
+			App.systemAgent.endRequest (request, response, 500, "Internal server error");
+			return;
+		}
+		mpdurl = DASH_MPD_PATH + "?" + SystemInterface.Constant.UrlQueryParameter + "=" + encodeURIComponent (JSON.stringify (cmd));
+
+		html = "<html><head>";
+		html += "<title>" + item.params.name + "</title>";
+		html += "<script type=\"text\/javascript\" src=\"/streamserver/dash.all.min.js\"></script>";
+		html += "</head><body><h2>" + item.params.name + "</h2>";
+		html += "<video data-dashjs-player autoplay src=\"" + mpdurl + "\" autobuffer=\"true\" controls=\"true\"></video>";
+		html += "</body></html>";
+		response.setHeader ("Content-Type", "text/html");
+		App.systemAgent.endRequest (request, response, 200, html);
+	}
+
+	// Handle a request with a GetDashMpd command
+	handleGetDashMpdRequest (cmdInv, request, response) {
+		let item;
+
+		item = this.streamMap[cmdInv.params.streamId];
+		if (item == null) {
+			App.systemAgent.endRequest (request, response, 404, "Not found");
+			return;
+		}
+
+		Fs.readFile (Path.join (this.configureMap.dataPath, item.params.id, App.STREAM_DASH_PATH, App.STREAM_DASH_DESCRIPTION_FILENAME), (err, data) => {
+			if (err != null) {
+				App.systemAgent.endRequest (request, response, 500, "Internal server error");
+				return;
+			}
+
+			data = data.toString ();
+			data = data.replace (/init-stream\$RepresentationID\$.m4s/g, "/streamserver/segment.m4s?streamId=" + cmdInv.params.streamId + "&amp;representationIndex=$$RepresentationID$$&amp;segmentIndex=0");
+			data = data.replace (/chunk-stream\$RepresentationID\$-\$Number%05d\$.m4s/g, "/streamserver/segment.m4s?streamId=" + cmdInv.params.streamId + "&amp;representationIndex=$$RepresentationID$$&amp;segmentIndex=$$Number%05d$$");
+
+			response.setHeader ("Content-Type", "dash/xml");
+			App.systemAgent.endRequest (request, response, 200, data);
+		});
+	}
+
+	// Handle a request for a DASH segment
+	handleGetDashSegmentRequest (request, response) {
+		let url, q, streamid, ri, si, item, filename, path;
+
+		url = Url.parse (request.url);
+		if (url == null) {
+			App.systemAgent.endRequest (request, response, 400, "Bad request");
+			return;
+		}
+
+		q = QueryString.parse (url.query);
+		streamid = (typeof q.streamId == "string") ? q.streamId : null;
+		ri = (typeof q.representationIndex == "string") ? q.representationIndex : null;
+		si = (typeof q.segmentIndex == "string") ? q.segmentIndex : null;
+		if ((streamid === null) || (ri === null) || (si === null)) {
+			App.systemAgent.endRequest (request, response, 400, "Bad request");
+			return;
+		}
+		if (streamid.search (/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/) != 0) {
+			App.systemAgent.endRequest (request, response, 400, "Bad request");
+			return;
+		}
+		if ((! ri.match (/^[0-9]+$/)) || (! si.match (/^[0-9]+$/))) {
+			App.systemAgent.endRequest (request, response, 400, "Bad request");
+			return;
+		}
+
+		item = this.streamMap[streamid];
+		if (item == null) {
+			App.systemAgent.endRequest (request, response, 404, "Not found");
+			return;
+		}
+		if (si == "0") {
+			filename = `init-stream${ri}.m4s`;
+		}
+		else {
+			filename = `chunk-stream${ri}-${si}.m4s`;
+		}
+
+		path = Path.join (this.configureMap.dataPath, item.params.id, App.STREAM_DASH_PATH, filename);
+		Fs.stat (path, (err, stats) => {
+			let stream, isopen;
+
+			if (err != null) {
+				Log.err (`${this.toString ()} failed to read DASH segment file; path=${path} err=${err}`);
+				App.systemAgent.endRequest (request, response, 404, "Not found");
+				return;
+			}
+
+			if (! stats.isFile ()) {
+				Log.err (`${this.toString ()} failed to read DASH segment file; path=${path} err=Not a regular file`);
+				App.systemAgent.endRequest (request, response, 404, "Not found");
+				return;
+			}
+
+			isopen = false;
+			stream = Fs.createReadStream (path, { });
+			stream.on ("error", (err) => {
+				Log.err (`${this.toString ()} failed to read DASH segment file; path=${path} err=${err}`);
+				if (! isopen) {
+					App.systemAgent.endRequest (request, response, 500, "Internal server error");
+				}
+			});
+
+			stream.on ("open", () => {
+				if (isopen) {
+					return;
+				}
+
+				isopen = true;
+				response.statusCode = 200;
+				response.setHeader ("Content-Type", "video/mp4");
+				response.setHeader ("Content-Length", stats.size);
+				stream.pipe (response);
+				stream.on ("finish", () => {
+					response.end ();
+				});
+
+				response.socket.setMaxListeners (0);
+				response.socket.once ("error", (err) => {
+					stream.close ();
+				});
+			});
+		});
 	}
 
 	// Handle a request with a GetHlsManifest command

@@ -211,7 +211,7 @@ class MediaServer extends ServerBase {
 	}
 
 	// Return a promise that creates DataStore indexes for use in manipulating records
-	createIndexes () {
+	createIndexes (ds) {
 		return (new Promise ((resolve, reject) => {
 			let indexes, obj, doCreate, endSeries;
 			indexes = [
@@ -222,22 +222,19 @@ class MediaServer extends ServerBase {
 			obj["prefix." + SystemInterface.Constant.AgentIdPrefixField] = 1;
 			indexes.push (obj);
 
+			obj = { };
+			obj["params.id"] = 1;
+			indexes.push (obj);
+
+			obj = { };
+			obj["params.name"] = 1;
+			indexes.push (obj);
+
 			setTimeout (() => {
 				Async.eachSeries (indexes, doCreate, endSeries);
 			}, 0);
 			doCreate = (index, callback) => {
-				let ds;
-
-				ds = App.systemAgent.dataStore;
-				if (ds == null) {
-					callback ("DataStore not available");
-					return;
-				}
-
-				ds.createIndex (index, { }, createComplete);
-				function createComplete (err) {
-					callback (err);
-				}
+				ds.createIndex (index, { }, callback);
 			};
 
 			endSeries = (err) => {
@@ -257,16 +254,13 @@ class MediaServer extends ServerBase {
 		if (this.isReadingRecords) {
 			return;
 		}
-		ds = App.systemAgent.dataStore;
-		if (ds == null) {
-			return;
-		}
 
 		this.isReadingRecords = true;
 		this.isReady = false;
 		recordmap = { };
-		ds.open ().then (() => {
-			return (this.createIndexes ());
+		App.systemAgent.openDataStore ().then ((dataStore) => {
+			ds = dataStore;
+			return (this.createIndexes (ds));
 		}).then (() => {
 			let crit, sort;
 
@@ -298,6 +292,7 @@ class MediaServer extends ServerBase {
 				return;
 			}
 
+			SystemInterface.populateDefaultFields (record.params, SystemInterface.Type[record.commandName]);
 			recordmap[record.params.id] = record;
 		};
 	}
@@ -355,6 +350,11 @@ class MediaServer extends ServerBase {
 			}
 
 			findresult.setSize = recordCount;
+			if (recordCount <= 0) {
+				client.emit (SystemInterface.Constant.WebSocketEvent, this.createCommand ("FindMediaResult", SystemInterface.Constant.Media, findresult));
+				return;
+			}
+
 			ds.findRecords (findCallback, crit, sort, max, skip);
 		}).catch ((err) => {
 			Log.err (`${this.toString ()} FindItems command failed to execute; err=${err}`);
@@ -375,6 +375,7 @@ class MediaServer extends ServerBase {
 			}
 
 			if (record != null) {
+				SystemInterface.populateDefaultFields (record.params, SystemInterface.Type[record.commandName]);
 				client.emit (SystemInterface.Constant.WebSocketEvent, record);
 			}
 		};

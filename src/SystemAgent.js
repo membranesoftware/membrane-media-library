@@ -103,6 +103,9 @@ class SystemAgent {
 		// A map of paths to functions for handling requests received by the secondary HTTP server
 		this.secondaryRequestHandlerMap = { };
 
+		// A map of URL paths to filesystem paths that should be handled as webroot requests by the secondary HTTP server
+		this.webrootMap = { };
+
 		// A map of paths to functions for handling invoke requests received by the main HTTP server
 		this.invokeRequestHandlerMap = { };
 
@@ -239,7 +242,7 @@ class SystemAgent {
 			this.accessControl.start ();
 			this.taskGroup.start ();
 			this.intentGroup.start ();
-			if (Object.keys (this.secondaryRequestHandlerMap).length > 0) {
+			if ((Object.keys (this.secondaryRequestHandlerMap).length > 0) || (Object.keys (this.webrootMap).length > 0)) {
 				return (this.startSecondaryHttpServer ());
 			}
 		}).then (() => {
@@ -456,9 +459,13 @@ class SystemAgent {
 				Async.eachSeries (argslist, execOpenssl, execComplete);
 			};
 			execOpenssl = (args, callback) => {
-				proc = App.systemAgent.createOpensslProcess (args, App.DATA_DIRECTORY, null, () => {
-					if (proc.hasError) {
-						callback ("Failed to generate TLS configuration (openssl process failed)");
+				proc = App.systemAgent.createOpensslProcess (args, App.DATA_DIRECTORY, null, (err, isExitSuccess) => {
+					if (err != null) {
+						callback (`Failed to generate TLS configuration; err=${err}`);
+						return;
+					}
+					if (! isExitSuccess) {
+						callback (`Failed to generate TLS configuration; err=openssl process ended with error`);
 						return;
 					}
 
@@ -975,7 +982,7 @@ class SystemAgent {
 		}
 
 		execute = (body) => {
-			let cmdinv, fn;
+			let cmdinv, fn, filepath;
 			fn = this.secondaryRequestHandlerMap[path];
 			if (fn != null) {
 				cmdinv = SystemInterface.parseCommand (body);
@@ -983,6 +990,65 @@ class SystemAgent {
 					cmdinv = { };
 				}
 				fn (cmdinv, request, response);
+				return;
+			}
+
+			filepath = "";
+			for (let i in this.webrootMap) {
+				if (path.indexOf (i) == 0) {
+					filepath = Path.normalize (Path.join (App.WEBROOT_DIRECTORY, this.webrootMap[i], path.substring (i.length)));
+					break;
+				}
+			}
+			if (filepath != "") {
+				Fs.stat (filepath, (err, stats) => {
+					let stream, isopen;
+
+					if (err != null) {
+						this.endRequest (request, response, 404, "Not found");
+						return;
+					}
+
+					if (! stats.isFile ()) {
+						this.endRequest (request, response, 404, "Not found");
+						return;
+					}
+
+					isopen = false;
+					stream = Fs.createReadStream (filepath, { });
+					stream.on ("error", (err) => {
+						Log.err (`Failed to read webroot file; clientAddress=${address} path=${filepath} err=${err}`);
+						if (! isopen) {
+							response.statusCode = 500;
+							response.end ();
+						}
+					});
+
+					stream.on ("open", () => {
+						if (isopen) {
+							return;
+						}
+
+						isopen = true;
+						response.statusCode = 200;
+
+						// TODO: Set the Content-Type header
+						// response.setHeader ("Content-Type", "video/MP2T");
+
+						response.setHeader ("Content-Length", stats.size);
+						stream.pipe (response);
+						stream.on ("finish", () => {
+							response.end ();
+						});
+
+						response.socket.setMaxListeners (0);
+						response.socket.once ("error", (err) => {
+							stream.close ();
+						});
+					});
+
+				});
+
 				return;
 			}
 			this.endRequest (request, response, 404, "Not found");
@@ -1059,6 +1125,17 @@ class SystemAgent {
 	// Set a request handler for the specified path. If a request with this path is received on the secondary HTTP server, the handler function is invoked with "request" and "response" objects.
 	addSecondaryRequestHandler (path, handler) {
 		this.secondaryRequestHandlerMap[path] = handler;
+		if (this.isStarted && (this.httpServer2 == null)) {
+			this.startSecondaryHttpServer ().then (() => { });
+		}
+	}
+
+	// Set a webroot handler for the specified URL path and file path relative to the application webroot directory. If a request with a base path matching this URL path is received on the secondary HTTP server, it is handled by reading a webroot file.
+	addWebroot (urlPath, filePath) {
+		if (urlPath.indexOf ("/") != 0) {
+			urlPath = "/" + urlPath;
+		}
+		this.webrootMap[urlPath] = filePath;
 		if (this.isStarted && (this.httpServer2 == null)) {
 			this.startSecondaryHttpServer ().then (() => { });
 		}

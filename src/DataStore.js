@@ -114,7 +114,7 @@ class DataStore {
 				process.nextTick (dataParseCallback);
 			};
 
-			storeProcessEnded = () => {
+			storeProcessEnded = (err, isExitSuccess) => {
 				if (! started) {
 					reject (Error ("Store process ended unexpectedly"));
 				}

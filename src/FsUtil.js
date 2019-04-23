@@ -574,6 +574,9 @@ exports.removeDirectory = function (directoryPath, callback) {
 	Fs.readdir (directoryPath, readdirComplete);
 	function readdirComplete (err, files) {
 		if (err != null) {
+			if (err.code == "ENOENT") {
+				err = null;
+			}
 			callback (err);
 			return;
 		}

@@ -36,7 +36,7 @@ const Path = require ("path");
 const Log = require (App.SOURCE_DIRECTORY + "/Log");
 const FsUtil = require (App.SOURCE_DIRECTORY + "/FsUtil");
 const SystemInterface = require (App.SOURCE_DIRECTORY + "/SystemInterface");
-const FfprobeJsonParser = require (App.SOURCE_DIRECTORY + "/Common/FfprobeJsonParser");
+const FfprobeJsonParser = require (App.SOURCE_DIRECTORY + "/FfprobeJsonParser");
 const TaskBase = require (App.SOURCE_DIRECTORY + "/Task/TaskBase");
 
 class ScanMediaFile extends TaskBase {
@@ -131,9 +131,9 @@ class ScanMediaFile extends TaskBase {
 			parser.parseLines (lines);
 			process.nextTick (dataParseCallback);
 		};
-		processEnded = () => {
-			if (proc.hasError) {
-				Log.warn (`Failed to scan media file; filename="${this.configureMap.mediaPath}" err="Scan process ended with error"`);
+		processEnded = (err) => {
+			if (err != null) {
+				Log.warn (`Failed to scan media file; filename="${this.configureMap.mediaPath}" err=${err}`);
 				this.end ();
 				return;
 			}
@@ -206,9 +206,9 @@ class ScanMediaFile extends TaskBase {
 			endCallback (err);
 		});
 
-		processEnded = () => {
-			if (proc.hasError) {
-				endCallback ("thumbnail creation process ended with error");
+		processEnded = (err) => {
+			if (err != null) {
+				endCallback (err);
 				return;
 			}
 
