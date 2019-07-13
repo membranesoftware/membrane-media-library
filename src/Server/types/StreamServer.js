@@ -111,6 +111,10 @@ class StreamServer extends ServerBase {
 						this.findItems (client, cmdInv);
 						break;
 					}
+					case SystemInterface.CommandId.FindMediaStreams: {
+						this.findMediaStreams (client, cmdInv);
+						break;
+					}
 				}
 			});
 
@@ -290,6 +294,10 @@ class StreamServer extends ServerBase {
 			obj["params.name"] = 1;
 			indexes.push (obj);
 
+			obj = { };
+			obj["params.sourceId"] = 1;
+			indexes.push (obj);
+
 			setTimeout (() => {
 				Async.eachSeries (indexes, doCreate, endSeries);
 			}, 0);
@@ -461,6 +469,67 @@ class StreamServer extends ServerBase {
 				client.emit (SystemInterface.Constant.WebSocketEvent, record);
 			}
 		};
+	}
+
+	// Execute a FindMediaStreams command and write result commands to the provided client
+	findMediaStreams (client, cmdInv) {
+		let ds;
+
+		if (cmdInv.params.sourceIds.length <= 0) {
+			return;
+		}
+
+		App.systemAgent.openDataStore ().then ((dataStore) => {
+			ds = dataStore;
+			return (new Promise ((resolve, reject) => {
+				let crit, sort, doFind, endSeries, findCallback, streams;
+
+				streams = [ ];
+				doFind = (sourceId, callback) => {
+					crit = {
+						command: SystemInterface.CommandId.StreamItem,
+						"params.sourceId": sourceId
+					};
+					sort = {
+						"params.id": 1
+					};
+
+					findCallback = (err, record) => {
+						if (err != null) {
+							callback (err);
+							return;
+						}
+						if (record == null) {
+							client.emit (SystemInterface.Constant.WebSocketEvent, this.createCommand ("FindMediaStreamsResult", SystemInterface.Constant.Stream, {
+								mediaId: sourceId,
+								streams: streams
+							}));
+
+							callback ();
+							return;
+						}
+
+						SystemInterface.populateDefaultFields (record.params, SystemInterface.Type[record.commandName]);
+						streams.push (record);
+					};
+
+					ds.findRecords (findCallback, crit, sort);
+				};
+
+				endSeries = (err) => {
+					if (err != null) {
+						reject (err);
+						return;
+					}
+
+					resolve ();
+				};
+
+				Async.eachSeries (cmdInv.params.sourceIds, doFind, endSeries);
+			}));
+		}).catch ((err) => {
+			Log.err (`${this.toString ()} FindMediaStreams command failed to execute; err=${err}`);
+		});
 	}
 
 	// Execute a ConfigureMediaStream command and return a command invocation result

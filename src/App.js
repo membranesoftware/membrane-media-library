@@ -34,7 +34,7 @@
 
 const Path = require ("path");
 
-exports.VERSION = "12-stable-a34dcdd6";
+exports.VERSION = "14-stable-3a7a675b";
 exports.AGENT_PLATFORM = "";
 
 exports.BASE_DIRECTORY = process.cwd ();
@@ -84,5 +84,7 @@ exports.STREAM_THUMBNAIL_PATH = "thumbnail";
 exports.STREAM_HLS_INDEX_FILENAME = "index.m3u8";
 exports.STREAM_DASH_DESCRIPTION_FILENAME = "vod.mpd";
 exports.STREAM_RECORD_FILENAME = "record";
+
+exports.CAMERA_CACHE_PATH = "camera-cache";
 
 global.App = exports;

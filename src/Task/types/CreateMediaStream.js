@@ -153,6 +153,13 @@ class CreateMediaStream extends TaskBase {
 			h = this.configureMap.mediaHeight;
 			vb = this.sourceParser.videoBitrate;
 			switch (this.configureMap.profile) {
+				case SystemInterface.Constant.CompressedStreamProfile: {
+					vb = Math.floor (vb / 2);
+					if (vb < 1024) {
+						vb = 1024;
+					}
+					break;
+				}
 				case SystemInterface.Constant.LowQualityStreamProfile: {
 					w = Math.floor (w / 2);
 					h = Math.floor (h / 2);
@@ -553,23 +560,28 @@ class CreateMediaStream extends TaskBase {
 		if (codec == "libx264") {
 			switch (this.configureMap.profile) {
 				case SystemInterface.Constant.CompressedStreamProfile: {
-					args.push ("-preset", "slower");
+					args.push ("-preset", "veryslow");
 					break;
 				}
 				case SystemInterface.Constant.LowQualityStreamProfile: {
-					args.push ("-preset", "medium");
+					args.push ("-preset", "slower");
 					break;
 				}
 				case SystemInterface.Constant.LowestQualityStreamProfile: {
-					args.push ("-preset", "medium");
+					args.push ("-preset", "slower");
 					break;
 				}
 				default: {
-					args.push ("-preset", "faster");
+					args.push ("-preset", "medium");
 					break;
 				}
 			}
+
+			args.push ("-profile:v", "high");
+			args.push ("-level", "4.2");
+			args.push ("-pix_fmt", "yuv420p");
 		}
+
 		args.push ("-b:v", this.destMetadata.videoBitrate);
 		args.push ("-s", `${this.destMetadata.width}x${this.destMetadata.height}`);
 		args.push ("-r", this.destMetadata.frameRate);

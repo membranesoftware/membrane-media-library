@@ -113,7 +113,8 @@ class ScanMediaFile extends TaskBase {
 				width: 0,
 				height: 0,
 				size: stats.size,
-				bitrate: 0
+				bitrate: 0,
+				isCreateStreamAvailable: true
 			};
 
 			parser = new FfprobeJsonParser (this.configureMap.mediaPath);

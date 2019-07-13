@@ -76,7 +76,12 @@ exports.write = function (level, message) {
 		if (logFilename == "") {
 			logFilename = Path.join (App.DATA_DIRECTORY, "main.log");
 		}
-		Fs.appendFileSync (logFilename, output + "\n", { 'mode' : 0o644 });
+		try {
+			Fs.appendFileSync (logFilename, output + "\n", { 'mode' : 0o644 });
+		}
+		catch (e) {
+			// Do nothing
+		}
 	}
 };
 

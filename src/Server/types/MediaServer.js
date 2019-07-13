@@ -111,6 +111,9 @@ class MediaServer extends ServerBase {
 				case SystemInterface.CommandId.ScanMediaItems: {
 					return (this.scanMediaItems ());
 				}
+				case SystemInterface.CommandId.RemoveMedia: {
+					return (this.removeMedia (cmdInv));
+				}
 			}
 
 			return (null);
@@ -230,6 +233,10 @@ class MediaServer extends ServerBase {
 			obj["params.name"] = 1;
 			indexes.push (obj);
 
+			obj = { };
+			obj["params.mtime"] = 1;
+			indexes.push (obj);
+
 			setTimeout (() => {
 				Async.eachSeries (indexes, doCreate, endSeries);
 			}, 0);
@@ -327,9 +334,18 @@ class MediaServer extends ServerBase {
 				"$options": "i"
 			};
 		}
-		sort = {
-			"params.name": 1
-		};
+
+		sort = { };
+		switch (cmdInv.params.sortOrder) {
+			case SystemInterface.Constant.NewestSort: {
+				sort["params.mtime"] = -1;
+				break;
+			}
+			default: {
+				sort["params.name"] = 1;
+				break;
+			}
+		}
 		findresult = {
 			searchKey: cmdInv.params.searchKey,
 			resultOffset: cmdInv.params.resultOffset
@@ -600,9 +616,9 @@ class MediaServer extends ServerBase {
 		};
 	}
 
-	// Remove MediaItem records and associated files for items not appearing in scanPathMap and clear the map when complete
+	// Update MediaItem records as appropriate for the contents of scanPathMap and clear the map when complete
 	pruneMediaItems () {
-		let ds, idlist, doRemove, endSeries;
+		let ds, idlist;
 
 		idlist = [ ];
 		for (let i in this.mediaPathMap) {
@@ -616,55 +632,89 @@ class MediaServer extends ServerBase {
 			return;
 		}
 
-		ds = App.systemAgent.dataStore;
-		if (ds == null) {
-			Log.err (`${this.toString ()} failed to prune media items; err="DataStore not available"`);
+		App.systemAgent.openDataStore ().then ((dataStore) => {
+			ds = dataStore;
+			return (new Promise ((resolve, reject) => {
+				let doUpdate, endSeries;
+
+				doUpdate = (recordId, callback) => {
+					let crit, update, options;
+
+					crit = {
+						"params.id": recordId
+					};
+					update = {
+						"$set": {
+							"params.isCreateStreamAvailable": false
+						}
+					};
+					options = { };
+					ds.updateRecords (crit, update, options, callback);
+				};
+
+				endSeries = (err) => {
+					if (err != null) {
+						reject (Error (err));
+						return;
+					}
+					resolve ();
+				};
+
+				Async.eachSeries (idlist, doUpdate, endSeries);
+			}));
+		}).catch ((err) => {
+			Log.err (`${this.toString ()} failed to prune media items; err=${err}`);
+		}).then (() => {
 			this.scanPathMap = { };
-			return;
+		});
+	}
+
+	// Execute a RemoveMedia command and return a command invocation result
+	removeMedia (cmdInv) {
+		let ds, record, crit;
+
+		record = this.mediaMap[cmdInv.params.id];
+		if (record == null) {
+			return (this.createCommand ("CommandResult", SystemInterface.Constant.Media, {
+				success: true
+			}));
 		}
 
-		ds.open ((err) => {
-			if (err != null) {
-				Log.err (`${this.toString ()} failed to prune media items; err=${err}`);
-				this.scanPathMap = { };
-				return;
-			}
-			Async.eachSeries (idlist, doRemove, endSeries);
+		delete (this.mediaPathMap[record.params.mediaPath]);
+		delete (this.mediaMap[cmdInv.params.id]);
+		App.systemAgent.openDataStore ().then ((dataStore) => {
+			ds = dataStore;
+			return (new Promise ((resolve, reject) => {
+				let crit;
+
+				crit = {
+					"params.id": cmdInv.params.id
+				};
+				ds.removeRecords (crit, (err) => {
+					if (err != null) {
+						reject (Error (err));
+						return;
+					}
+					resolve ();
+				});
+			}));
+		}).then (() => {
+			return (new Promise ((resolve, reject) => {
+				FsUtil.removeDirectory (Path.join (this.configureMap.dataPath, cmdInv.params.id), (err) => {
+					if (err != null) {
+						reject (Error (err));
+						return;
+					}
+					resolve ();
+				});
+			}));
+		}).catch ((err) => {
+			Log.err (`${this.toString ()} failed to remove MediaItem record; err=${err}`);
 		});
 
-		doRemove = (recordId, callback) => {
-			let record, crit, removeRecordsComplete, removeDirectoryComplete;
-
-			record = this.mediaMap[recordId];
-			if (record != null) {
-				delete (this.mediaPathMap[record.params.mediaPath]);
-				delete (this.mediaMap[recordId]);
-			}
-
-			crit = {
-				"params.id": recordId
-			};
-			setTimeout (() => {
-				ds.removeRecords (crit, removeRecordsComplete);
-			}, 0);
-			removeRecordsComplete = (err) => {
-				if (err != null) {
-					callback (err);
-					return;
-				}
-
-				FsUtil.removeDirectory (Path.join (this.configureMap.dataPath, recordId), removeDirectoryComplete);
-			};
-			removeDirectoryComplete = (err) => {
-				callback (err);
-			};
-		};
-		endSeries = (err) => {
-			if (err != null) {
-				Log.err (`${this.toString ()} failed to prune media items; err=${err}`);
-			}
-			this.scanPathMap = { };
-		};
+		return (this.createCommand ("CommandResult", SystemInterface.Constant.Media, {
+			success: true
+		}));
 	}
 
 	// Handle a get thumbnail image request
