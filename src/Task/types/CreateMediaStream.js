@@ -1,6 +1,5 @@
 /*
-* Copyright 2019 Membrane Software <author@membranesoftware.com>
-*                 https://membranesoftware.com
+* Copyright 2018-2019 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are met:
@@ -37,6 +36,7 @@ const Log = require (App.SOURCE_DIRECTORY + "/Log");
 const SystemInterface = require (App.SOURCE_DIRECTORY + "/SystemInterface");
 const FsUtil = require (App.SOURCE_DIRECTORY + "/FsUtil");
 const FfprobeJsonParser = require (App.SOURCE_DIRECTORY + "/FfprobeJsonParser");
+const FfmpegOutputParser = require (App.SOURCE_DIRECTORY + "/FfmpegOutputParser");
 const HlsIndexParser = require (App.SOURCE_DIRECTORY + "/HlsIndexParser");
 const TaskBase = require (App.SOURCE_DIRECTORY + "/Task/TaskBase");
 
@@ -46,8 +46,7 @@ const DEFAULT_AUDIO_CODEC = "aac";
 class CreateMediaStream extends TaskBase {
 	constructor () {
 		super ();
-		this.name = "Create stream";
-		this.description = "Generate data required to prepare a media file for streaming playback";
+		this.name = App.uiText.getText ("createMediaStreamTaskName");
 		this.resultObjectType = "StreamItem";
 		this.recordCommandType = SystemInterface.Constant.Stream;
 
@@ -103,6 +102,8 @@ class CreateMediaStream extends TaskBase {
 			}
 		];
 
+		this.minProgressPercent = 0;
+		this.maxProgressPercent = 0;
 		this.streamDataPath = "";
 		this.sourcePath = "";
 		this.sourceParser = { };
@@ -110,7 +111,7 @@ class CreateMediaStream extends TaskBase {
 		this.hlsMetadata = { };
 	}
 
-	// Subclass method. Implementations should execute actions appropriate when the task has been successfully configured
+	// Subclass method. Implementations should execute actions appropriate when the task has been successfully configured.
 	doConfigure () {
 		this.subtitle = this.configureMap.streamName;
 		this.statusMap.streamName = this.configureMap.streamName;
@@ -123,8 +124,6 @@ class CreateMediaStream extends TaskBase {
 		this.sourcePath = this.configureMap.mediaPath;
 
 		// TODO: Check isCancelled at each step
-		// TODO: Increment percentComplete as the task runs
-
 		FsUtil.fileExists (this.sourcePath).then ((exists) => {
 			if (! exists) {
 				return (Promise.reject (Error ("Source media file not found")));
@@ -210,11 +209,17 @@ class CreateMediaStream extends TaskBase {
 				this.destMetadata.bitrate = 1024;
 			}
 
-			this.addPercentComplete (1);
+			this.setPercentComplete (1);
+			this.minProgressPercent = 1;
+			this.maxProgressPercent = 46;
 			return (this.transcodeHlsStream ());
 		}).then (() => {
+			this.minProgressPercent = 47;
+			this.maxProgressPercent = 94;
 			return (this.transcodeDashStream ());
 		}).then (() => {
+			this.minProgressPercent = 95;
+			this.maxProgressPercent = 99;
 			return (this.createThumbnails ());
 		}).then (() => {
 			return (this.readHlsMetadata ());
@@ -298,7 +303,7 @@ class CreateMediaStream extends TaskBase {
 	// Return a promise that executes the HLS transcode operation
 	transcodeHlsStream () {
 		return (new Promise ((resolve, reject) => {
-			let args, vcodec, proc, processData, processEnded;
+			let args, vcodec, parser, proc, processData, processEnded;
 
 			// TODO: Possibly assign a different video codec (defaulting to libx264)
 			vcodec = DEFAULT_VIDEO_CODEC;
@@ -325,13 +330,14 @@ class CreateMediaStream extends TaskBase {
 			args.push ("%05d.ts");
 
 			setTimeout (() => {
+				parser = new FfmpegOutputParser ();
 				proc = App.systemAgent.createFfmpegProcess (args, Path.join (this.streamDataPath, App.STREAM_HLS_PATH), processData, processEnded);
 			}, 0);
 
 			processData = (lines, dataParseCallback) => {
-
-				if (this.getPercentComplete () < 50) {
-					this.addPercentComplete (1);
+				parser.parseLines (lines);
+				if ((typeof this.sourceParser.duration == "number") && (typeof parser.transcodePosition == "number") && (this.sourceParser.duration > 0)) {
+					this.setPercentComplete (this.minProgressPercent + ((this.maxProgressPercent - this.minProgressPercent) * parser.transcodePosition / this.sourceParser.duration));
 				}
 				process.nextTick (dataParseCallback);
 			};
@@ -346,9 +352,7 @@ class CreateMediaStream extends TaskBase {
 					reject (Error ("HLS transcode process failed"));
 					return;
 				}
-				if (this.getPercentComplete () < 50) {
-					this.setPercentComplete (50);
-				}
+				this.setPercentComplete (this.maxProgressPercent);
 				resolve ();
 			}
 		}));
@@ -356,7 +360,7 @@ class CreateMediaStream extends TaskBase {
 
 	transcodeDashStream () {
 		return (new Promise ((resolve, reject) => {
-			let args, vcodec, proc, processData, processEnded;
+			let args, vcodec, parser, proc, processData, processEnded;
 
 			// TODO: Possibly assign a different video codec (defaulting to libx264)
 			vcodec = DEFAULT_VIDEO_CODEC;
@@ -384,13 +388,14 @@ class CreateMediaStream extends TaskBase {
 			args.push (App.STREAM_DASH_DESCRIPTION_FILENAME);
 
 			setTimeout (() => {
+				parser = new FfmpegOutputParser ();
 				proc = App.systemAgent.createFfmpegProcess (args, Path.join (this.streamDataPath, App.STREAM_DASH_PATH), processData, processEnded);
 			}, 0);
 
 			processData = (lines, dataParseCallback) => {
-
-				if (this.getPercentComplete () < 50) {
-					this.addPercentComplete (1);
+				parser.parseLines (lines);
+				if ((typeof this.sourceParser.duration == "number") && (typeof parser.transcodePosition == "number") && (this.sourceParser.duration > 0)) {
+					this.setPercentComplete (this.minProgressPercent + ((this.maxProgressPercent - this.minProgressPercent) * parser.transcodePosition / this.sourceParser.duration));
 				}
 				process.nextTick (dataParseCallback);
 			};
@@ -405,9 +410,7 @@ class CreateMediaStream extends TaskBase {
 					reject (Error ("DASH transcode process failed"));
 					return;
 				}
-				if (this.getPercentComplete () < 50) {
-					this.setPercentComplete (50);
-				}
+				this.setPercentComplete (this.maxProgressPercent);
 				resolve ();
 			}
 		}));
@@ -480,9 +483,7 @@ class CreateMediaStream extends TaskBase {
 					return;
 				}
 
-				if (this.getPercentComplete () < 90) {
-					this.addPercentComplete (1);
-				}
+				this.setPercentComplete (this.minProgressPercent + ((this.maxProgressPercent - this.minProgressPercent) * segmentindex / segmentfiles.length));
 				createNextThumbnail ();
 			};
 		}));

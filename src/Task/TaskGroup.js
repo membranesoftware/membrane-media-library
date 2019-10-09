@@ -1,6 +1,5 @@
 /*
-* Copyright 2019 Membrane Software <author@membranesoftware.com>
-*                 https://membranesoftware.com
+* Copyright 2018-2019 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are met:
@@ -41,6 +40,13 @@ const Task = require (App.SOURCE_DIRECTORY + "/Task/Task");
 
 class TaskGroup {
 	constructor () {
+		// Read-only data members
+		this.taskCount = 0;
+		this.runCount = 0;
+		this.runTaskName = "";
+		this.runTaskSubtitle = "";
+		this.runTaskPercentComplete = 0;
+
 		// Read-write data members
 		this.maxRunCount = 1;
 
@@ -71,7 +77,7 @@ class TaskGroup {
 		let mintask, items, mapitem, taskitem, shouldremove, shouldwrite, cmd;
 
 		while (true) {
-			if (this.getRunCount () >= this.maxRunCount) {
+			if (this.runCount >= this.maxRunCount) {
 				break;
 			}
 
@@ -96,7 +102,8 @@ class TaskGroup {
 			}
 		}
 
-		for (let task of Object.values (this.taskMap)) {
+		items = Object.values (this.taskMap);
+		for (let task of items) {
 			taskitem = task.getTaskItem ();
 			mapitem = this.taskRecordMap[task.id];
 
@@ -127,7 +134,11 @@ class TaskGroup {
 			}
 		}
 
-		items = Object.values (this.taskMap);
+		this.taskCount = 0;
+		this.runCount = 0;
+		this.runTaskName = "";
+		this.runTaskSubtitle = "";
+		this.runTaskPercentComplete = 0;
 		for (let task of items) {
 			shouldremove = false;
 			if ((task.startTime > 0) && (task.endTime > 0)) {
@@ -139,6 +150,17 @@ class TaskGroup {
 
 			if (shouldremove) {
 				this.removeTask (task.id);
+				continue;
+			}
+
+			++(this.taskCount);
+			if (task.isRunning) {
+				++(this.runCount);
+			}
+			if ((this.runTaskName == "") && (task.name != "")) {
+				this.runTaskName = task.name;
+				this.runTaskSubtitle = task.subtitle;
+				this.runTaskPercentComplete = task.getPercentComplete ();
 			}
 		}
 
@@ -215,25 +237,6 @@ class TaskGroup {
 		delete (this.taskMap[taskId]);
 		delete (this.taskRecordMap[taskId]);
 		this.eventEmitter.removeAllListeners (taskId);
-	}
-
-	// Return the number of tasks in the group
-	getTaskCount () {
-		return (Object.keys (this.taskMap).length);
-	}
-
-	// Return the number of tasks currently running
-	getRunCount () {
-		let count;
-
-		count = 0;
-		for (let task of Object.values (this.taskMap)) {
-			if (task.isRunning) {
-				++count;
-			}
-		}
-
-		return (count);
 	}
 }
 

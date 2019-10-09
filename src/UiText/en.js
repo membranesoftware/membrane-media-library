@@ -27,39 +27,9 @@
 * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 * POSSIBILITY OF SUCH DAMAGE.
 */
-// Class that holds intent type data
-
 "use strict";
 
-const App = global.App || { };
-const Result = require (App.SOURCE_DIRECTORY + "/Result");
-const IntentTypes = require ("./types");
-
-function Intent () {
-
-}
-
-module.exports = Intent;
-
-Intent.IntentTypes = IntentTypes;
-exports.IntentTypes = IntentTypes;
-
-// createIntent - Return a newly created intent of the specified type name and configure it with the provided object. Returns null if the intent could not be created, indicating that the type name was not found or the configuration was not valid.
-Intent.createIntent = function (typeName, configureParams) {
-	let itype, intent;
-
-	itype = Intent.IntentTypes[typeName];
-	if (itype == null) {
-		return (null);
-	}
-
-	intent = new itype ();
-	if ((typeof configureParams != "object") || (configureParams == null)) {
-		configureParams = { };
-	}
-	if (intent.configure (configureParams) != Result.SUCCESS) {
-		return (null);
-	}
-
-	return (intent);
-};
+exports.appStartMessage = "is supported by donations from users like you. If you get utility and enjoyment from this application, please think about contributing money to support its development. Any amount helps! mbrn.tech/contribute";
+exports.getDiskSpaceTaskName = "Update storage space available";
+exports.createMediaStreamTaskName = "Create stream";
+exports.scanMediaFileTaskName = "Scan media file";

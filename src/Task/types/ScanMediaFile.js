@@ -1,6 +1,5 @@
 /*
-* Copyright 2019 Membrane Software <author@membranesoftware.com>
-*                 https://membranesoftware.com
+* Copyright 2018-2019 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are met:
@@ -36,14 +35,14 @@ const Path = require ("path");
 const Log = require (App.SOURCE_DIRECTORY + "/Log");
 const FsUtil = require (App.SOURCE_DIRECTORY + "/FsUtil");
 const SystemInterface = require (App.SOURCE_DIRECTORY + "/SystemInterface");
+const RepeatTask = require (App.SOURCE_DIRECTORY + "/RepeatTask");
 const FfprobeJsonParser = require (App.SOURCE_DIRECTORY + "/FfprobeJsonParser");
 const TaskBase = require (App.SOURCE_DIRECTORY + "/Task/TaskBase");
 
 class ScanMediaFile extends TaskBase {
 	constructor () {
 		super ();
-		this.name = "Scan media file";
-		this.description = "Gather metadata from a media file and generate its thumbnail images. Return a result object containing a MediaItem command.";
+		this.name = App.uiText.getText ("scanMediaFileTaskName");
 		this.resultObjectType = "MediaItem";
 
 		this.configureParams = [
@@ -76,9 +75,12 @@ class ScanMediaFile extends TaskBase {
 
 		this.progressPercentDelta = 1;
 		this.sourceParser = { };
+		this.progressTask = new RepeatTask ();
+		this.thumbnailPath = "";
+		this.thumbnailCount = 0;
 	}
 
-	// Subclass method. Implementations should execute actions appropriate when the task has been successfully configured
+	// Subclass method. Implementations should execute actions appropriate when the task has been successfully configured.
 	doConfigure () {
 		this.subtitle = Path.basename (this.configureMap.mediaPath);
 		this.statusMap.mediaPath = this.configureMap.mediaPath;
@@ -86,6 +88,11 @@ class ScanMediaFile extends TaskBase {
 		if (this.progressPercentDelta < 1) {
 			this.progressPercentDelta = 1;
 		}
+	}
+
+	// Subclass method. Implementations should execute actions appropriate when the task has ended.
+	doEnd () {
+		this.progressTask.stop ();
 	}
 
 	// Subclass method. Implementations should execute task actions and call end when complete.
@@ -183,12 +190,16 @@ class ScanMediaFile extends TaskBase {
 		FsUtil.createDirectory (this.configureMap.dataPath).then (() => {
 			return (FsUtil.createDirectory (datapath));
 		}).then (() => {
-			datapath = Path.join (datapath, "thumbnail");
-			return (FsUtil.createDirectory (datapath));
+			this.thumbnailPath = Path.join (datapath, "thumbnail");
+			return (FsUtil.createDirectory (this.thumbnailPath));
 		}).then (() => {
 			let fps;
 
-			this.addPercentComplete (this.progressPercentDelta);
+			this.thumbnailCount = 0;
+			this.progressTask.setRepeating ((callback) => {
+				this.countThumbnailFiles (callback);
+			}, 3000);
+
 			fps = this.sourceParser.duration / 1000;
 			fps /= this.configureMap.mediaThumbnailCount;
 			fps = 1 / fps;
@@ -201,8 +212,8 @@ class ScanMediaFile extends TaskBase {
 				"-an",
 				"-y",
 				"-start_number", "0",
-				Path.join (datapath, `%d.jpg`)
-			], datapath, null, processEnded);
+				Path.join (this.thumbnailPath, `%d.jpg`)
+			], this.thumbnailPath, null, processEnded);
 		}).catch ((err) => {
 			endCallback (err);
 		});
@@ -215,6 +226,32 @@ class ScanMediaFile extends TaskBase {
 
 			endCallback ();
 		};
+	}
+
+	// Find thumbnail files created by the scan process and update task progress
+	countThumbnailFiles (endCallback) {
+		let filepath;
+
+		filepath = Path.join (this.thumbnailPath, `${this.thumbnailCount}.jpg`);
+		FsUtil.fileExists (filepath, (err, exists) => {
+			if (err != null) {
+				this.progressTask.stop ();
+			}
+			else {
+				if (exists) {
+					++(this.thumbnailCount);
+					this.addPercentComplete (this.progressPercentDelta);
+					if (this.thumbnailCount >= this.configureMap.mediaThumbnailCount) {
+						this.progressTask.stop ();
+					}
+					else {
+						this.progressTask.setNextRepeat (1);
+					}
+				}
+			}
+
+			endCallback ();
+		});
 	}
 }
 module.exports = ScanMediaFile;

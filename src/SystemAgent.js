@@ -1,6 +1,5 @@
 /*
-* Copyright 2019 Membrane Software <author@membranesoftware.com>
-*                 https://membranesoftware.com
+* Copyright 2018-2019 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are met:
@@ -62,12 +61,14 @@ const Server = require (App.SOURCE_DIRECTORY + "/Server/Server");
 
 const START_EVENT = "start";
 const STOP_EVENT = "stop";
+const AGENT_STATUS_EVENT = "AgentStatus";
+const WEBROOT_INDEX_FILENAME = "index.html";
 
 class SystemAgent {
 	constructor () {
 		this.isEnabled = true;
 		this.dataPath = App.DATA_DIRECTORY;
-		this.runStatePath = this.dataPath + "/state";
+		this.runStatePath = Path.join (this.dataPath, "state");
 		this.agentId = "";
 
 		this.displayName = "";
@@ -106,6 +107,20 @@ class SystemAgent {
 		// A map of URL paths to filesystem paths that should be handled as webroot requests by the secondary HTTP server
 		this.webrootMap = { };
 
+		this.webrootContentTypeMap = {
+			".css": "text/css",
+			".jpeg": "image/jpeg",
+			".jpg": "image/jpeg",
+			".js": "text/javascript",
+			".json": "application/json",
+			".gif": "image/gif",
+			".htm": "text/html",
+			".html": "text/html",
+			".png": "image/png",
+			".ttf": "font/ttf",
+			".txt": "text/plain"
+		};
+
 		// A map of paths to functions for handling invoke requests received by the main HTTP server
 		this.invokeRequestHandlerMap = { };
 
@@ -135,6 +150,11 @@ class SystemAgent {
 
 		this.agentStopEventEmitter = new EventEmitter ();
 		this.agentStopEventEmitter.setMaxListeners (0);
+
+		this.agentStatusTask = new RepeatTask ();
+		this.agentStatusEventEmitter = new EventEmitter ();
+		this.agentStatusEventEmitter.setMaxListeners (0);
+		this.lastAgentStatus = null;
 	}
 
 	// Start the agent's operation and invoke startCompleteCallback (err) when complete
@@ -386,6 +406,29 @@ class SystemAgent {
 					}
 					case SystemInterface.CommandId.WatchTasks: {
 						this.taskGroup.watchTasks (client, cmdInv);
+						break;
+					}
+					case SystemInterface.CommandId.WatchStatus: {
+						let execute;
+
+						execute = (agentStatus) => {
+							client.emit (SystemInterface.Constant.WebSocketEvent, agentStatus);
+						};
+
+						this.agentStatusEventEmitter.addListener (AGENT_STATUS_EVENT, execute);
+						client.once ("disconnect", () => {
+							this.agentStatusEventEmitter.removeListener (AGENT_STATUS_EVENT, execute);
+							if (this.agentStatusEventEmitter.listenerCount (AGENT_STATUS_EVENT) <= 0) {
+								this.agentStatusTask.stop ();
+							}
+						});
+
+						if (! this.agentStatusTask.isRepeating) {
+							this.lastAgentStatus = null;
+							this.agentStatusTask.setRepeating ((callback) => {
+								this.emitAgentStatus (callback);
+							}, App.HEARTBEAT_PERIOD * 5, App.HEARTBEAT_PERIOD * 6);
+						}
 						break;
 					}
 				}
@@ -859,12 +902,12 @@ class SystemAgent {
 		return (null);
 	}
 
-  // Add a task to the agent's run queue, assigning its ID value in the process. If endCallback is provided, set the task to invoke that function when it completes.
+	// Add a task to the agent's run queue, assigning its ID value in the process. If endCallback is provided, set the task to invoke that function when it completes.
 	runTask (task, endCallback) {
 		this.taskGroup.runTask (task, endCallback);
 	}
 
-  // Add an intent to the agent's intent group, applying an optional group name value for identification
+	// Add an intent to the agent's intent group, applying an optional group name value for identification
 	runIntent (intent, groupName) {
 		if (typeof groupName == "string") {
 			intent.groupName = groupName;
@@ -982,7 +1025,7 @@ class SystemAgent {
 		}
 
 		execute = (body) => {
-			let cmdinv, fn, filepath;
+			let writeFile, cmdinv, fn, dirname, matches, filepath;
 			fn = this.secondaryRequestHandlerMap[path];
 			if (fn != null) {
 				cmdinv = SystemInterface.parseCommand (body);
@@ -993,65 +1036,88 @@ class SystemAgent {
 				return;
 			}
 
-			filepath = "";
-			for (let i in this.webrootMap) {
-				if (path.indexOf (i) == 0) {
-					filepath = Path.normalize (Path.join (App.WEBROOT_DIRECTORY, this.webrootMap[i], path.substring (i.length)));
-					break;
-				}
+			dirname = path;
+			matches = dirname.match (/^([/][^/]*)[/].*$/);
+			if (matches != null) {
+				dirname = matches[1];
 			}
-			if (filepath != "") {
-				Fs.stat (filepath, (err, stats) => {
-					let stream, isopen;
 
+			dirname = this.webrootMap[dirname];
+			if (typeof dirname != "string") {
+				this.endRequest (request, response, 404, "Not found");
+				return;
+			}
+			filepath = Path.join (App.WEBROOT_DIRECTORY, dirname);
+			if (path.length >= dirname.length) {
+				filepath = Path.join (filepath, Path.normalize (path.substring (dirname.length)));
+			}
+
+			Fs.stat (filepath, (err, stats) => {
+				if (err != null) {
+					this.endRequest (request, response, 404, "Not found");
+					return;
+				}
+				if (stats.isFile ()) {
+					writeFile (filepath, stats);
+					return;
+				}
+				if (! stats.isDirectory ()) {
+					this.endRequest (request, response, 404, "Not found");
+					return;
+				}
+				filepath = Path.normalize (Path.join (filepath, WEBROOT_INDEX_FILENAME));
+				Fs.stat (filepath, (err, stats) => {
 					if (err != null) {
 						this.endRequest (request, response, 404, "Not found");
 						return;
 					}
-
 					if (! stats.isFile ()) {
 						this.endRequest (request, response, 404, "Not found");
 						return;
 					}
 
-					isopen = false;
-					stream = Fs.createReadStream (filepath, { });
-					stream.on ("error", (err) => {
-						Log.err (`Failed to read webroot file; clientAddress=${address} path=${filepath} err=${err}`);
-						if (! isopen) {
-							response.statusCode = 500;
-							response.end ();
-						}
-					});
+					writeFile (filepath, stats);
+				});
+			});
 
-					stream.on ("open", () => {
-						if (isopen) {
-							return;
-						}
+			writeFile = (writeFilePath, fileStats) => {
+				let stream, isopen, contenttype;
 
-						isopen = true;
-						response.statusCode = 200;
+				contenttype = this.webrootContentTypeMap[Path.extname (writeFilePath)];
+				if (typeof contenttype != "string") {
+					contenttype = "application/octet-stream";
+				}
 
-						// TODO: Set the Content-Type header
-						// response.setHeader ("Content-Type", "video/MP2T");
-
-						response.setHeader ("Content-Length", stats.size);
-						stream.pipe (response);
-						stream.on ("finish", () => {
-							response.end ();
-						});
-
-						response.socket.setMaxListeners (0);
-						response.socket.once ("error", (err) => {
-							stream.close ();
-						});
-					});
-
+				isopen = false;
+				stream = Fs.createReadStream (writeFilePath, { });
+				stream.on ("error", (err) => {
+					Log.err (`Failed to read webroot file; clientAddress=${address} path=${writeFilePath} err=${err}`);
+					if (! isopen) {
+						response.statusCode = 500;
+						response.end ();
+					}
 				});
 
-				return;
-			}
-			this.endRequest (request, response, 404, "Not found");
+				stream.on ("open", () => {
+					if (isopen) {
+						return;
+					}
+
+					isopen = true;
+					response.statusCode = 200;
+					response.setHeader ("Content-Type", contenttype);
+					response.setHeader ("Content-Length", fileStats.size);
+					stream.pipe (response);
+					stream.on ("close", () => {
+						response.end ();
+					});
+
+					response.socket.setMaxListeners (0);
+					response.socket.once ("error", (err) => {
+						stream.close ();
+					});
+				});
+			};
 		};
 
 		if (request.method == "GET") {
@@ -1089,6 +1155,58 @@ class SystemAgent {
 		response.end ();
 	}
 
+	// End an HTTP request by writing response data from a file
+	writeFileResponse (request, response, filePath, contentType) {
+		Fs.stat (filePath, (err, stats) => {
+			let stream, isopen;
+
+			if (err != null) {
+				Log.debug (`Error reading HTTP response file; url=${request.url} path=${filePath} err=${err}`);
+				this.endRequest (request, response, 404, "Not found");
+				return;
+			}
+
+			if (! stats.isFile ()) {
+				Log.debug (`Error reading HTTP response file; url=${request.url} path=${filePath} err=Not a regular file`);
+				this.endRequest (request, response, 404, "Not found");
+				return;
+			}
+
+			isopen = false;
+			stream = Fs.createReadStream (filePath, { });
+			stream.on ("error", (err) => {
+				Log.debug (`Error reading HTTP response file; url=${request.url} path=${filePath} err=${err}`);
+				if (! isopen) {
+					this.endRequest (request, response, 500, "Internal server error");
+				}
+			});
+
+			stream.on ("open", () => {
+				if (isopen) {
+					return;
+				}
+
+				isopen = true;
+				response.statusCode = 200;
+				if ((typeof contentType == "string") && (contentType != "")) {
+					response.setHeader ("Content-Type", contentType);
+				}
+				response.setHeader ("Content-Length", stats.size);
+				Log.debug4 (`HTTP file response; url=${request.url} path=${filePath} contentType=${contentType} size=${stats.size}`);
+				stream.pipe (response);
+				stream.on ("close", () => {
+					response.end ();
+				});
+
+				response.socket.setMaxListeners (0);
+				response.socket.once ("error", (err) => {
+					Log.debug (`Error writing HTTP response file; url=${request.url} path=${filePath} err=${err}`);
+					stream.close ();
+				});
+			});
+		});
+	}
+
 	// Set a request handler for the specified path. If a request with this path is received on the main HTTP server, the handler function is invoked with "request" and "response" objects.
 	addMainRequestHandler (path, handler) {
 		this.mainRequestHandlerMap[path] = handler;
@@ -1123,8 +1241,11 @@ class SystemAgent {
 	}
 
 	// Set a request handler for the specified path. If a request with this path is received on the secondary HTTP server, the handler function is invoked with "request" and "response" objects.
-	addSecondaryRequestHandler (path, handler) {
-		this.secondaryRequestHandlerMap[path] = handler;
+	addSecondaryRequestHandler (urlPath, handler) {
+		if (urlPath.indexOf ("/") != 0) {
+			urlPath = "/" + urlPath;
+		}
+		this.secondaryRequestHandlerMap[urlPath] = handler;
 		if (this.isStarted && (this.httpServer2 == null)) {
 			this.startSecondaryHttpServer ().then (() => { });
 		}
@@ -1134,6 +1255,9 @@ class SystemAgent {
 	addWebroot (urlPath, filePath) {
 		if (urlPath.indexOf ("/") != 0) {
 			urlPath = "/" + urlPath;
+		}
+		if (typeof filePath != "string") {
+			filePath = urlPath;
 		}
 		this.webrootMap[urlPath] = filePath;
 		if (this.isStarted && (this.httpServer2 == null)) {
@@ -1392,6 +1516,33 @@ class SystemAgent {
 		process.nextTick (endCallback);
 	}
 
+	// Execute actions to emit status update events if needed and invoke endCallback when complete
+	emitAgentStatus (endCallback) {
+		let agentstatus, shouldwrite;
+
+		agentstatus = this.getStatus ();
+		if (this.lastAgentStatus != null) {
+			shouldwrite = (agentstatus.params.taskCount !== this.lastAgentStatus.params.taskCount) ||
+				(agentstatus.params.runCount !== this.lastAgentStatus.params.runCount) ||
+				(agentstatus.params.runTaskName !== this.lastAgentStatus.params.runTaskName) ||
+				(agentstatus.params.runTaskSubtitle !== this.lastAgentStatus.params.runTaskSubtitle) ||
+				(agentstatus.params.runTaskPercentComplete !== this.lastAgentStatus.params.runTaskPercentComplete);
+
+			for (let server of this.serverList) {
+				if (server.findStatusChange (agentstatus)) {
+					shouldwrite = true;
+				}
+			}
+
+			if (shouldwrite) {
+				this.agentStatusEventEmitter.emit (AGENT_STATUS_EVENT, agentstatus);
+			}
+		}
+		this.lastAgentStatus = agentstatus;
+
+		process.nextTick (endCallback);
+	}
+
 	// Execute actions appropriate for a received datagram message
 	handleDatagramMessage (msg) {
 		let cmd;
@@ -1543,10 +1694,15 @@ class SystemAgent {
 			nodeVersion: process.version,
 			platform: App.AGENT_PLATFORM,
 			isEnabled: this.isEnabled,
-			taskCount: this.taskGroup.getTaskCount (),
-			runCount: this.taskGroup.getRunCount (),
+			taskCount: this.taskGroup.taskCount,
+			runCount: this.taskGroup.runCount,
 			maxRunCount: this.taskGroup.maxRunCount
 		};
+		if (this.taskGroup.runTaskName != "") {
+			params.runTaskName = this.taskGroup.runTaskName;
+			params.runTaskSubtitle = this.taskGroup.runTaskSubtitle;
+			params.runTaskPercentComplete = this.taskGroup.runTaskPercentComplete;
+		}
 		for (let server of this.serverList) {
 			server.setStatus (params);
 		}
@@ -2100,6 +2256,7 @@ class SystemAgent {
 		return (new ExecProcess (runpath, runArgs, env, workingPath, processData, processEnded));
 	}
 
+	// Return a newly created ExecProcess object that launches openssl. workingPath defaults to the application data directory if empty.
 	createOpensslProcess (runArgs, workingPath, processData, processEnded) {
 		let runpath, env;
 
@@ -2119,6 +2276,28 @@ class SystemAgent {
 		}
 
 		return (new ExecProcess (runpath, runArgs, env, workingPath, processData, processEnded));
+	}
+
+	// Return a promise that executes a child process and resolves with the process isExitSuccess value if successful
+	runProcess (execPath, execArgs, envParams, workingPath, dataCallback) {
+		return (new Promise ((resolve, reject) => {
+			let proc;
+
+			proc = new ExecProcess (execPath, execArgs, envParams, workingPath, (lines, lineCallback) => {
+				if (typeof dataCallback != "function") {
+					process.nextTick (lineCallback);
+					return;
+				}
+				dataCallback (lines, lineCallback);
+			}, (err, isExitSuccess) => {
+				if (err != null) {
+					reject (Error (err));
+					return;
+				}
+
+				resolve (isExitSuccess);
+			});
+		}));
 	}
 }
 

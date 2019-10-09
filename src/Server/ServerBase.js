@@ -1,6 +1,5 @@
 /*
-* Copyright 2019 Membrane Software <author@membranesoftware.com>
-*                 https://membranesoftware.com
+* Copyright 2018-2019 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are met:
@@ -197,6 +196,21 @@ class ServerBase {
 		}
 
 		fields[this.getAgentStatusKey ()] = cmd.params;
+	}
+
+	// Return a boolean value indicating if the provided AgentStatus command indicates a server status change
+	findStatusChange (agentStatus) {
+		if (! this.isRunning) {
+			return (false);
+		}
+
+		return (this.doFindStatusChange (agentStatus));
+	}
+
+	// Return a boolean value indicating if the provided AgentStatus command contains subclass-specific fields indicating a server status change
+	doFindStatusChange (agentStatus) {
+		// Default implementation returns false
+		return (false);
 	}
 
 	// Provide server configuration data by adding an appropriate field to an AgentConfiguration params object

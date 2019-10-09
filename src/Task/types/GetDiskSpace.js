@@ -1,6 +1,5 @@
 /*
-* Copyright 2019 Membrane Software <author@membranesoftware.com>
-*                 https://membranesoftware.com
+* Copyright 2018-2019 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are met:
@@ -40,8 +39,7 @@ const TaskBase = require (App.SOURCE_DIRECTORY + "/Task/TaskBase");
 class GetDiskSpace extends TaskBase {
 	constructor () {
 		super ();
-		this.name = "Get disk space";
-		this.description = "Gather data regarding available disk space for a target path and generate a result object with number fields \"total\", \"used\", and \"free\", specified in bytes";
+		this.name = App.uiText.getText ("getDiskSpaceTaskName");
 
 		this.configureParams = [
 			{

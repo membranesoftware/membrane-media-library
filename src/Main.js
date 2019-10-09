@@ -1,6 +1,5 @@
 /*
-* Copyright 2019 Membrane Software <author@membranesoftware.com>
-*                 https://membranesoftware.com
+* Copyright 2018-2019 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are met:
@@ -38,6 +37,7 @@ const Result = require (App.SOURCE_DIRECTORY + "/Result");
 const FsUtil = require (App.SOURCE_DIRECTORY + "/FsUtil");
 const SystemAgent = require (App.SOURCE_DIRECTORY + "/SystemAgent");
 const SystemInterface = require (App.SOURCE_DIRECTORY + "/SystemInterface");
+const UiText = require (App.SOURCE_DIRECTORY + "/UiText/UiText");
 
 process.setMaxListeners (0);
 
@@ -51,6 +51,13 @@ let configParams = [
 		flags: SystemInterface.ParamFlag.Required,
 		description: "The log level that should be written by the server",
 		defaultValue: "ERR"
+	},
+	{
+		name: "Language",
+		type: "string",
+		flags: SystemInterface.ParamFlag.Required,
+		description: "The language that should be used for server UI text, or an empty value to select the language based on environment settings",
+		defaultValue: ""
 	},
 	{
 		name: "UdpPort",
@@ -261,8 +268,11 @@ if (conf != null) {
 	App.STORE_DATABASE = fields.StoreDatabase;
 	App.STORE_COLLECTION = fields.StoreCollection;
 	App.STORE_RUN_PERIOD = fields.StoreRunPeriod;
+	App.LANGUAGE = fields.Language;
 }
 
+// TODO: Check for an environment value specifying text language
+App.uiText = new UiText (App.LANGUAGE);
 App.systemAgent = new SystemAgent ();
 App.systemAgent.start (startComplete);
 function startComplete (err) {
@@ -272,7 +282,7 @@ function startComplete (err) {
 	}
 
 	Log.info (`${App.AGENT_APPLICATION_NAME} started; version=${App.VERSION} serverAddress=${App.systemAgent.urlHostname}:${App.systemAgent.httpServerPort1} hostname=${App.systemAgent.urlHostname} tcpPort1=${App.systemAgent.httpServerPort1} tcpPort2=${App.systemAgent.httpServerPort2} agentId=${App.systemAgent.agentId}`);
-	Log.notice (`${App.AGENT_APPLICATION_NAME} is supported by donations from users like you. If you get utility and enjoyment from this application, please think about contributing money to support its development. Any amount helps! https:\/\/membranesoftware.com\/contribute\/`);
+	Log.notice (`${App.AGENT_APPLICATION_NAME} ${App.uiText.getText ("appStartMessage")}`);
 }
 
 // Process event handlers

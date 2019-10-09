@@ -1,6 +1,5 @@
 /*
-* Copyright 2019 Membrane Software <author@membranesoftware.com>
-*                 https://membranesoftware.com
+* Copyright 2018-2019 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are met:
@@ -35,8 +34,6 @@ const Util = require ("util");
 const Fs = require ("fs");
 const Path = require ("path");
 const Async = require ("async");
-const Crypto = require ("crypto");
-const UuidV4 = require ("uuid/v4");
 const Result = require (App.SOURCE_DIRECTORY + "/Result");
 const Log = require (App.SOURCE_DIRECTORY + "/Log");
 const FsUtil = require (App.SOURCE_DIRECTORY + "/FsUtil");
@@ -45,9 +42,21 @@ const SystemInterface = require (App.SOURCE_DIRECTORY + "/SystemInterface");
 const Task = require (App.SOURCE_DIRECTORY + "/Task/Task");
 const ServerBase = require (App.SOURCE_DIRECTORY + "/Server/ServerBase");
 
-const GET_FILE_PATH = "/mediaserver/getfile";
-const THUMBNAIL_PATH = "/mediaserver/thumbnail.jpg";
-const MEDIA_FILE_EXTENSIONS = [ ".avi", ".mp4", ".wmv", ".mkv", ".vob", ".mpeg4", ".mov", ".flv", ".ogg", ".webm", ".divx" ];
+const MEDIA_PATH = "/med/a";
+const THUMBNAIL_PATH = "/med/b.jpg";
+const MEDIA_FILE_EXTENSIONS = [
+	".avi",
+	".mp4",
+	".wmv",
+	".mkv",
+	".vob",
+	".mpeg4",
+	".mov",
+	".flv",
+	".ogg",
+	".webm",
+	".divx"
+];
 
 class MediaServer extends ServerBase {
 	constructor () {
@@ -103,68 +112,72 @@ class MediaServer extends ServerBase {
 
 	// Start the server's operation and invoke the provided callback when complete, with an "err" parameter (non-null if an error occurred)
 	doStart (startCallback) {
-		App.systemAgent.addInvokeRequestHandler ("/", SystemInterface.Constant.Media, (cmdInv) => {
-			switch (cmdInv.command) {
-				case SystemInterface.CommandId.GetStatus: {
-					return (this.getStatus ());
+		FsUtil.createDirectory (this.configureMap.dataPath).then (() => {
+			App.systemAgent.addInvokeRequestHandler ("/", SystemInterface.Constant.Media, (cmdInv) => {
+				switch (cmdInv.command) {
+					case SystemInterface.CommandId.GetStatus: {
+						return (this.getStatus ());
+					}
+					case SystemInterface.CommandId.ScanMediaItems: {
+						return (this.scanMediaItems ());
+					}
+					case SystemInterface.CommandId.RemoveMedia: {
+						return (this.removeMedia (cmdInv));
+					}
 				}
-				case SystemInterface.CommandId.ScanMediaItems: {
-					return (this.scanMediaItems ());
+
+				return (null);
+			});
+
+			App.systemAgent.addLinkCommandHandler (SystemInterface.Constant.Media, (client, cmdInv) => {
+				switch (cmdInv.command) {
+					case SystemInterface.CommandId.FindItems: {
+						this.findItems (client, cmdInv);
+						break;
+					}
 				}
-				case SystemInterface.CommandId.RemoveMedia: {
-					return (this.removeMedia (cmdInv));
+			});
+
+			App.systemAgent.addSecondaryRequestHandler (THUMBNAIL_PATH, (cmdInv, request, response) => {
+				switch (cmdInv.command) {
+					case SystemInterface.CommandId.GetThumbnailImage: {
+						this.handleGetThumbnailImageRequest (cmdInv, request, response);
+						break;
+					}
+					default: {
+						App.systemAgent.endRequest (request, response, 400, "Bad request");
+						break;
+					}
 				}
+			});
+
+			App.systemAgent.addSecondaryRequestHandler (MEDIA_PATH, (cmdInv, request, response) => {
+				switch (cmdInv.command) {
+					case SystemInterface.CommandId.GetMedia: {
+						this.handleGetMediaRequest (cmdInv, request, response);
+						break;
+					}
+					default: {
+						App.systemAgent.endRequest (request, response, 400, "Bad request");
+						break;
+					}
+				}
+			});
+
+			App.systemAgent.runDataStore (() => {
+				this.readRecords ();
+			});
+
+			if (this.configureMap.scanPeriod > 0) {
+				this.scanMediaDirectoryTask.setRepeating ((callback) => {
+					this.scanMediaDirectory (callback);
+				}, this.configureMap.scanPeriod * 1000);
 			}
 
-			return (null);
+			startCallback ();
+		}).catch ((err) => {
+			startCallback (err);
 		});
-
-		App.systemAgent.addLinkCommandHandler (SystemInterface.Constant.Media, (client, cmdInv) => {
-			switch (cmdInv.command) {
-				case SystemInterface.CommandId.FindItems: {
-					this.findItems (client, cmdInv);
-					break;
-				}
-			}
-		});
-
-		App.systemAgent.addSecondaryRequestHandler (THUMBNAIL_PATH, (cmdInv, request, response) => {
-			switch (cmdInv.command) {
-				case SystemInterface.CommandId.GetThumbnailImage: {
-					this.handleGetThumbnailImageRequest (cmdInv, request, response);
-					break;
-				}
-				default: {
-					App.systemAgent.endRequest (request, response, 400, "Bad request");
-					break;
-				}
-			}
-		});
-
-		App.systemAgent.addSecondaryRequestHandler (GET_FILE_PATH, (cmdInv, request, response) => {
-			switch (cmdInv.command) {
-				case SystemInterface.CommandId.GetMedia: {
-					this.handleGetMediaRequest (cmdInv, request, response);
-					break;
-				}
-				default: {
-					App.systemAgent.endRequest (request, response, 400, "Bad request");
-					break;
-				}
-			}
-		});
-
-		App.systemAgent.runDataStore (() => {
-			this.readRecords ();
-		});
-
-		if (this.configureMap.scanPeriod > 0) {
-			this.scanMediaDirectoryTask.setRepeating ((callback) => {
-				this.scanMediaDirectory (callback);
-			}, this.configureMap.scanPeriod * 1000);
-		}
-
-		process.nextTick (startCallback);
 	}
 
 	// Execute subclass-specific stop operations and invoke the provided callback when complete
@@ -197,20 +210,13 @@ class MediaServer extends ServerBase {
 
 	// Return a command invocation containing the server's status
 	doGetStatus () {
-		let params;
-
-		params = {
+		return (this.createCommand ("MediaServerStatus", SystemInterface.Constant.Media, {
 			isReady: this.isReady,
 			mediaCount: Object.keys (this.mediaMap).length,
-			mediaPath: GET_FILE_PATH,
-			thumbnailPath: "",
+			mediaPath: MEDIA_PATH,
+			thumbnailPath: (this.configureMap.mediaThumbnailCount > 0) ? THUMBNAIL_PATH : "",
 			thumbnailCount: this.configureMap.mediaThumbnailCount
-		};
-		if (this.configureMap.mediaThumbnailCount > 0) {
-			params.thumbnailPath = THUMBNAIL_PATH;
-		}
-
-		return (this.createCommand ("MediaServerStatus", SystemInterface.Constant.Media, params));
+		}));
 	}
 
 	// Return a promise that creates DataStore indexes for use in manipulating records
@@ -719,126 +725,29 @@ class MediaServer extends ServerBase {
 
 	// Handle a get thumbnail image request
 	handleGetThumbnailImageRequest (cmdInv, request, response) {
-		let item, imagepath, statComplete;
+		let item, filepath;
 
 		item = this.mediaMap[cmdInv.params.id];
 		if (item == null) {
-			response.statusCode = 404;
-			response.end ();
+			App.systemAgent.endRequest (request, response, 404, "Not found");
 			return;
 		}
 
-		imagepath = Path.join (this.configureMap.dataPath, item.params.id, "thumbnail", `${Math.floor (cmdInv.params.thumbnailIndex)}.jpg`);
-
-		statComplete = (err, stats) => {
-			let stream, isopen;
-
-			if (err != null) {
-				Log.err (`${this.toString ()} error reading thumbnail file; path=${imagepath} err=${err}`);
-				response.statusCode = 404;
-				response.end ();
-				return;
-			}
-
-			if (! stats.isFile ()) {
-				Log.err (`${this.toString ()} error reading thumbnail file; path=${imagepath} err=Not a regular file`);
-				response.statusCode = 404;
-				response.end ();
-				return;
-			}
-
-			isopen = false;
-			stream = Fs.createReadStream (imagepath, { });
-			stream.on ("error", function (err) {
-				Log.err (`${this.toString ()} error reading thumbnail file; path=${imagepath} err=${err}`);
-				if (! isopen) {
-					response.statusCode = 500;
-					response.end ();
-				}
-			});
-
-			stream.on ("open", function () {
-				if (isopen) {
-					return;
-				}
-
-				isopen = true;
-				response.statusCode = 200;
-				response.setHeader ("Content-Type", "image/jpeg");
-				response.setHeader ("Content-Length", stats.size);
-				stream.pipe (response);
-				stream.on ("finish", function () {
-					response.end ();
-				});
-
-				response.socket.setMaxListeners (0);
-				response.socket.once ("error", function (err) {
-					stream.close ();
-				});
-			});
-		};
-		Fs.stat (imagepath, statComplete);
+		filepath = Path.join (this.configureMap.dataPath, item.params.id, "thumbnail", `${Math.floor (cmdInv.params.thumbnailIndex)}.jpg`);
+		App.systemAgent.writeFileResponse (request, response, filepath, "image/jpeg");
 	}
 
 	// Handle a GetMedia request by reading filesystem data for the specified item
 	handleGetMediaRequest (cmdInv, request, response) {
-		let path, item, statComplete;
+		let item, filepath;
 
 		item = this.mediaMap[cmdInv.params.id];
 		if (item == null) {
-			response.statusCode = 404;
-			response.end ();
+			App.systemAgent.endRequest (request, response, 404, "Not found");
 			return;
 		}
-		path = Path.join (this.configureMap.mediaPath, item.params.name);
-
-		statComplete = (err, stats) => {
-			let stream, isopen;
-
-			if (err != null) {
-				Log.err (`${this.toString ()} error reading media file; path=${path} err=${err}`);
-				response.statusCode = 404;
-				response.end ();
-				return;
-			}
-
-			if (! stats.isFile ()) {
-				Log.err (`${this.toString ()} error reading media file; path=${imagepath} err=Not a regular file`);
-				response.statusCode = 404;
-				response.end ();
-				return;
-			}
-
-			isopen = false;
-			stream = Fs.createReadStream (path, { });
-			stream.on ("error", function (err) {
-				Log.err (`${this.toString ()} error reading media file; path=${path} err=${err}`);
-				if (! isopen) {
-					response.statusCode = 500;
-					response.end ();
-				}
-			});
-
-			stream.on ("open", function () {
-				if (isopen) {
-					return;
-				}
-
-				isopen = true;
-				response.statusCode = 200;
-				response.setHeader ("Content-Length", stats.size);
-				stream.pipe (response);
-				stream.on ("finish", function () {
-					response.end ();
-				});
-
-				response.socket.setMaxListeners (0);
-				response.socket.once ("error", function (err) {
-					stream.close ();
-				});
-			});
-		};
-		Fs.stat (path, statComplete);
+		filepath = Path.join (this.configureMap.mediaPath, item.params.name);
+		App.systemAgent.writeFileResponse (request, response, filepath);
 	}
 }
 

@@ -1,6 +1,5 @@
 /*
-* Copyright 2019 Membrane Software <author@membranesoftware.com>
-*                 https://membranesoftware.com
+* Copyright 2018-2019 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are met:
@@ -47,14 +46,8 @@ class TaskBase {
 		// Set this value to specify the task's ID (a UUID string)
 		this.id = "00000000-0000-0000-0000-000000000000";
 
-		// Set this value to specify the task's description
-		this.description = "";
-
 		// Set this value to specify the task's subtitle
 		this.subtitle = "";
-
-		// Populate this list with strings to specify metadata tags that apply to the task
-		this.tags = [ ];
 
 		// Populate this list with SystemInterface Type field items to specify parameters acceptable for task configuration
 		this.configureParams = [ ];
@@ -100,7 +93,7 @@ class TaskBase {
 	toString () {
 		let s;
 
-		s = `<Task id=${this.id} name="${this.name}" tags=${JSON.stringify (this.tags)}`;
+		s = `<Task id=${this.id} name="${this.name}"`;
 		if (Object.keys (this.statusMap).length > 0) {
 			s += " " + JSON.stringify (this.statusMap);
 		}
@@ -140,8 +133,6 @@ class TaskBase {
 			id: this.id,
 			name: this.name,
 			subtitle: this.subtitle,
-			tags: this.tags,
-			description: this.description,
 			isRunning: this.isRunning,
 			percentComplete: this.getPercentComplete (),
 			createTime: this.createTime,
@@ -194,7 +185,7 @@ class TaskBase {
 		this.doCancel ();
 	}
 
-	// Subclass method. Implementations should execute actions appropriate when the task has been successfully configured
+	// Subclass method. Implementations should execute actions appropriate when the task has been successfully configured.
 	doConfigure () {
 		// Default implementation does nothing
 	}

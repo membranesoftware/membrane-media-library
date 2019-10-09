@@ -1,6 +1,5 @@
 /*
-* Copyright 2019 Membrane Software <author@membranesoftware.com>
-*                 https://membranesoftware.com
+* Copyright 2018-2019 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are met:
@@ -39,7 +38,12 @@ const Log = require (App.SOURCE_DIRECTORY + "/Log");
 const STOP_SIGNAL_REPEAT_DELAY = 4800; // milliseconds
 
 class ExecProcess {
-	// execPath is the path to the binary to run, execArgs is an array containing command line arguments for the child process, envParams is an object containing environment variables for the child process, workingPath is the path to the working directory for process execution (defaults to the application data directory if empty), dataCallback is a function that should be called each time a set of lines is parsed (invoked with an array of strings and a callback), and endCallback is a function that should be called when the process ends (invoked with err and isExitSuccess parameters).
+	// execPath: the path to the binary to run
+	// execArgs: an array containing command line arguments for the child process
+	// envParams: an object containing environment variables for the child process
+	// workingPath: the path to the working directory for process execution (defaults to the application data directory if empty)
+	// dataCallback: a function that should be called each time a set of lines is parsed (invoked with an array of strings and a callback)
+	// endCallback: a function that should be called when the process ends (invoked with err and isExitSuccess parameters).
 	constructor (execPath, execArgs, envParams, workingPath, dataCallback, endCallback) {
 		// Read-only data members
 		this.isPaused = false;

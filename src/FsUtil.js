@@ -1,6 +1,5 @@
 /*
-* Copyright 2019 Membrane Software <author@membranesoftware.com>
-*                 https://membranesoftware.com
+* Copyright 2018-2019 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are met:
@@ -41,7 +40,7 @@ const Log = require (App.SOURCE_DIRECTORY + "/Log");
 
 const FS_READ_BLOCK_SIZE = 65536; // bytes
 
-// Create a directory if it does not already exist, and invoke the provided callback when complete, with a non-null "err" parameter if an error occurred. If endCallback is not provided, instead return a promise that resolves if the operation succeeds or rejects if it doesn't.
+// Create a directory if it does not already exist, and invoke endCallback (err) when complete. If endCallback is not provided, instead return a promise that resolves if the operation succeeds or rejects if it doesn't.
 exports.createDirectory = function (path, endCallback) {
 	let execute = (executeCallback) => {
 		let dirStat, dirStatComplete, mkdirComplete;
@@ -339,7 +338,7 @@ exports.openFile = function (path, endCallback) {
 	}
 };
 
-// Write data to a file and invoke the provided callback when complete, with an "err" parameter (non-null if an error occurred). If endCallback is not provided, instead return a promise that resolves if the operation succeeds or rejects if it doesn't.
+// Write data to a file and invoke endCallback (err) when complete. If endCallback is not provided, instead return a promise that resolves if the operation succeeds or rejects if it doesn't.
 exports.writeFile = function (filename, data, options, endCallback) {
 	let execute = (executeCallback) => {
 		Fs.writeFile (filename, data, options, executeCallback);
@@ -441,7 +440,7 @@ exports.readFileLines = function (filename, dataCallback, endCallback) {
 	}
 };
 
-// Write a state object to a file and invoke the provided callback when complete, with an "err" parameter (non-null if an error occurred). If endCallback is not provided, instead return a promise that resolves if the operation succeeds or rejects if it doesn't.
+// Write a state object to a file and invoke endCallback (err) when complete. If endCallback is not provided, instead return a promise that resolves if the operation succeeds or rejects if it doesn't.
 exports.writeStateFile = function (filename, state, endCallback) {
 	if (typeof endCallback == "function") {
 		exports.writeFile (filename, JSON.stringify (state), { "mode" : 0o600 }, endCallback);
@@ -451,7 +450,7 @@ exports.writeStateFile = function (filename, state, endCallback) {
 	}
 };
 
-// Read a previously written state object file and invoke the provided callback when complete, with an "err" parameter (non-null if an error occurred) and a "state" parameter (an object containing state data, might be null if the state file was non-existent). If endCallback is not provided, instead return a promise that resolves if the operation succeeds or rejects if it doesn't.
+// Read a previously written state object file and invoke endCallback (err, state) when complete. If endCallback is not provided, instead return a promise that resolves if the operation succeeds or rejects if it doesn't.
 exports.readStateFile = function (filename, endCallback) {
 	let execute = (executeCallback) => {
 		Fs.readFile (filename, readFileComplete);
@@ -494,7 +493,7 @@ exports.readStateFile = function (filename, endCallback) {
 	}
 };
 
-// Read all entries in the specified directory and invoke the provided callback when complete, with "err" and "files" parameters. If endCallback is not provided, instead return a promise that resolves if the operation succeeds or rejects if it doesn't.
+// Read all entries in the specified directory and invoke endCallback (err, files) when complete. If endCallback is not provided, instead return a promise that resolves if the operation succeeds or rejects if it doesn't.
 exports.readDirectory = function (directoryPath, endCallback) {
 	let execute = (executeCallback) => {
 		Fs.readdir (directoryPath, executeCallback);
@@ -516,7 +515,7 @@ exports.readDirectory = function (directoryPath, endCallback) {
 	}
 };
 
-// Remove all files in the specified directory and invoke the provided callback when complete, with an "err" parameter (non-null if an error occurred)
+// Remove all files in the specified directory and invoke callback (err) when complete
 exports.removeAllFiles = function (directoryPath, callback) {
 	var fileindex, filenames, curfile;
 
@@ -567,7 +566,7 @@ exports.removeAllFiles = function (directoryPath, callback) {
 	}
 };
 
-// Remove the specified directory, recursing through all contained files and subdirectories, and invoke the provided callback when complete, with an "err" parameter (non-null if an error occurred)
+// Remove the specified directory, recursing through all contained files and subdirectories, and invoke callback (err) when complete.
 exports.removeDirectory = function (directoryPath, callback) {
 	var fileindex, filenames, curfile;
 
@@ -732,7 +731,7 @@ exports.findAllFiles = function (directoryPath, endCallback) {
 	}
 };
 
-// Check if the named path exists as a regular file and invoke the provided callback when complete, with "err" and "exists" parameters. If endCallback is not provided, instead return a promise that resolves if the operation succeeds or rejects if it doesn't.
+// Check if the named path exists as a regular file and invoke endCallback (err, exists) when complete. If endCallback is not provided, instead return a promise that resolves if the operation succeeds or rejects if it doesn't.
 exports.fileExists = function (path, endCallback) {
 	let execute = (executeCallback) => {
 		Fs.stat (path, (err, stats) => {
@@ -833,4 +832,26 @@ exports.readConfigListFile = function (filename) {
 		config.push (line.trim ());
 	}
 	return (config);
+};
+
+// Rename a file and invoke endCallback (err) when complete. If endCallback is not provided, instead return a promise that resolves if the operation succeeds or rejects if it doesn't.
+exports.renameFile = function (oldPath, newPath, endCallback) {
+	let execute = (executeCallback) => {
+		Fs.rename (oldPath, newPath, executeCallback);
+	};
+
+	if (typeof endCallback == "function") {
+		execute (endCallback);
+	}
+	else {
+		return (new Promise ((resolve, reject) => {
+			execute ((err) => {
+				if (err != null) {
+					reject (Error (err));
+					return;
+				}
+				resolve ();
+			});
+		}));
+	}
 };

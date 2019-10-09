@@ -1,6 +1,5 @@
 /*
-* Copyright 2019 Membrane Software <author@membranesoftware.com>
-*                 https://membranesoftware.com
+* Copyright 2018-2019 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are met:
@@ -34,8 +33,8 @@
 
 const App = global.App || { };
 
-// Return an item from the map, or null if the item wasn't found. If createFn is a function that returns an object, a new item is created instead.
-function getItem (map, key, createFn) {
+// Return an item from the map, or undefined if the item wasn't found. If createFn is a function that returns an object, a new item is created instead.
+exports.getItem = function (map, key, createFn) {
 	var item;
 
 	item = map[key];
@@ -47,5 +46,4 @@ function getItem (map, key, createFn) {
 	}
 
 	return (item);
-}
-exports.getItem = getItem;
+};

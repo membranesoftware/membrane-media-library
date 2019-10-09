@@ -1,6 +1,5 @@
 /*
-* Copyright 2019 Membrane Software <author@membranesoftware.com>
-*                 https://membranesoftware.com
+* Copyright 2018-2019 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are met:
@@ -33,8 +32,8 @@
 "use strict";
 
 const App = global.App || { };
-const Fs = require ('fs');
-const Path = require ('path');
+const Fs = require ("fs");
+const Path = require ("path");
 
 exports.ERR = 0;
 exports.WARNING = 1;
@@ -68,7 +67,7 @@ exports.write = function (level, message) {
 	}
 
 	now = new Date ();
-	output = '[' + exports.getDateString (now) + ']' + '[' + logLevelNames[level] + '] ' + message;
+	output = "[" + exports.getDateString (now) + "]" + "[" + logLevelNames[level] + "] " + message;
 	if (isConsoleOutputEnabled) {
 		console.log (output);
 	}
@@ -77,7 +76,7 @@ exports.write = function (level, message) {
 			logFilename = Path.join (App.DATA_DIRECTORY, "main.log");
 		}
 		try {
-			Fs.appendFileSync (logFilename, output + "\n", { 'mode' : 0o644 });
+			Fs.appendFileSync (logFilename, output + "\n", { "mode" : 0o644 });
 		}
 		catch (e) {
 			// Do nothing
@@ -156,71 +155,71 @@ exports.setLogFilename = function (filename) {
 exports.getDateString = function (d) {
 	let year, month, day, hour, minute, second, ms;
 
-	year = '' + d.getFullYear ();
-	month = '' + (d.getMonth () + 1);
+	year = "" + d.getFullYear ();
+	month = "" + (d.getMonth () + 1);
 	if (month.length < 2) {
-		month = '0' + month;
+		month = "0" + month;
 	}
 
-	day = '' + d.getDate ();
+	day = "" + d.getDate ();
 	if (day.length < 2) {
-		day = '0' + day;
+		day = "0" + day;
 	}
 
-	hour = '' + d.getHours ();
+	hour = "" + d.getHours ();
 	if (hour.length < 2) {
-		hour = '0' + hour;
+		hour = "0" + hour;
 	}
 
-	minute = '' + d.getMinutes ();
+	minute = "" + d.getMinutes ();
 	if (minute.length < 2) {
-		minute = '0' + minute;
+		minute = "0" + minute;
 	}
 
-	second = '' + d.getSeconds ();
+	second = "" + d.getSeconds ();
 	if (second.length < 2) {
-		second = '0' + second;
+		second = "0" + second;
 	}
 
-	ms = '' + d.getMilliseconds ();
+	ms = "" + d.getMilliseconds ();
 	while (ms.length < 3) {
-		ms = '0' + ms;
+		ms = "0" + ms;
 	}
 
-	return (year + '-' + month + '-' + day + ' ' + hour + ':' + minute + ':' + second + '.' + ms);
+	return (year + "-" + month + "-" + day + " " + hour + ":" + minute + ":" + second + "." + ms);
 };
 
 // Return a formatted duration string generated from the provided number of milliseconds
 exports.getDurationString = function (ms) {
 	let duration, t, s;
 
-	duration = '';
+	duration = "";
 	t = ms;
 	t /= 1000;
 	if (t >= 86400) {
-		duration += Math.floor (t / 86400) + 'd ';
+		duration += Math.floor (t / 86400) + "d ";
 		t %= 86400;
 	}
 
-	s = '' + Math.floor (t / 3600);
+	s = "" + Math.floor (t / 3600);
 	if (s.length < 2) {
-		s = '0' + s;
+		s = "0" + s;
 	}
 	duration += s;
 	t %= 3600;
 
-	s = '' + Math.floor (t / 60);
+	s = "" + Math.floor (t / 60);
 	if (s.length < 2) {
-		s = '0' + s;
+		s = "0" + s;
 	}
-	duration += ':' + s;
+	duration += ":" + s;
 	t %= 60;
 
-	s = '' + Math.floor (t);
+	s = "" + Math.floor (t);
 	if (s.length < 2) {
-		s = '0' + s;
+		s = "0" + s;
 	}
-	duration += ':' + s;
+	duration += ":" + s;
 
 	return (duration);
 };

@@ -27,39 +27,61 @@
 * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 * POSSIBILITY OF SUCH DAMAGE.
 */
-// Class that holds intent type data
+// Class that holds strings for use in UI text
 
 "use strict";
 
 const App = global.App || { };
-const Result = require (App.SOURCE_DIRECTORY + "/Result");
-const IntentTypes = require ("./types");
+const Path = require ("path");
+const Log = require (App.SOURCE_DIRECTORY + '/Log');
 
-function Intent () {
+const DEFAULT_LANGUAGE = "en";
 
+class UiText {
+	constructor (language) {
+		this.strings = { };
+		this.load (language);
+	}
+
+	// Load text strings of the desired language, or the default language if not specified
+	load (language) {
+		let strings;
+		if ((typeof language == "string") && (language != "")) {
+			try {
+				strings = require (Path.join (App.SOURCE_DIRECTORY, "UiText", `${language}.js`));
+			}
+			catch (err) {
+				Log.warn (`Failed to load text strings; language=${language} err=${err}`);
+				strings = null;
+			}
+
+			if (strings != null) {
+				Log.debug (`Loaded text strings; language=${language}`);
+				this.strings = strings;
+				return;
+			}
+		}
+
+		language = DEFAULT_LANGUAGE;
+		try {
+			strings = require (Path.join (App.SOURCE_DIRECTORY, "UiText", `${language}.js`));
+		}
+		catch (err) {
+			Log.warn (`Failed to load text strings; language=${language} err=${err}`);
+			strings = null;
+		}
+		if (strings != null) {
+			Log.debug (`Loaded text strings; language=${language}`);
+			this.strings = strings;
+		}
+	}
+
+	// Return the text string matching the specified key, or an empty string if no such string was found
+	getText (key) {
+		let s;
+
+		s = this.strings[key];
+		return ((typeof s == "string") ? s : "");
+	}
 }
-
-module.exports = Intent;
-
-Intent.IntentTypes = IntentTypes;
-exports.IntentTypes = IntentTypes;
-
-// createIntent - Return a newly created intent of the specified type name and configure it with the provided object. Returns null if the intent could not be created, indicating that the type name was not found or the configuration was not valid.
-Intent.createIntent = function (typeName, configureParams) {
-	let itype, intent;
-
-	itype = Intent.IntentTypes[typeName];
-	if (itype == null) {
-		return (null);
-	}
-
-	intent = new itype ();
-	if ((typeof configureParams != "object") || (configureParams == null)) {
-		configureParams = { };
-	}
-	if (intent.configure (configureParams) != Result.SUCCESS) {
-		return (null);
-	}
-
-	return (intent);
-};
+module.exports = UiText;

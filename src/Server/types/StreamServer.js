@@ -1,6 +1,5 @@
 /*
-* Copyright 2019 Membrane Software <author@membranesoftware.com>
-*                 https://membranesoftware.com
+* Copyright 2018-2019 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are met:
@@ -45,14 +44,14 @@ const RepeatTask = require (App.SOURCE_DIRECTORY + "/RepeatTask");
 const Task = require (App.SOURCE_DIRECTORY + "/Task/Task");
 const ServerBase = require (App.SOURCE_DIRECTORY + "/Server/ServerBase");
 
-const WEBROOT_PATH = "/streamserver";
-const HLS_STREAM_PATH = "/streamserver/hls/index.m3u8";
-const HLS_SEGMENT_PATH = "/streamserver/hls/segment.ts";
-const HLS_HTML5_PATH = "/streamserver/hls.html";
-const DASH_HTML5_PATH = "/streamserver/play";
-const DASH_MPD_PATH = "/streamserver/dash.mpd";
-const DASH_SEGMENT_PATH = "/streamserver/segment.m4s";
-const THUMBNAIL_PATH = "/streamserver/thumbnail.png";
+const WEBROOT_PATH = "/str";
+const THUMBNAIL_PATH = "/str/a.png";
+const HLS_HTML5_PATH = "/str/b.html";
+const HLS_STREAM_PATH = "/str/c.m3u8";
+const HLS_SEGMENT_PATH = "/str/d.ts";
+const DASH_HTML5_PATH = "/str/e";
+const DASH_MPD_PATH = "/str/f.mpd";
+const DASH_SEGMENT_PATH = "/str/g.m4s";
 const GET_DISK_SPACE_PERIOD = 7 * 60 * 1000; // milliseconds
 
 class StreamServer extends ServerBase {
@@ -239,7 +238,8 @@ class StreamServer extends ServerBase {
 			totalStorage: this.totalStorage,
 			hlsStreamPath: HLS_STREAM_PATH,
 			hlsHtml5Path: HLS_HTML5_PATH,
-			thumbnailPath: THUMBNAIL_PATH
+			thumbnailPath: THUMBNAIL_PATH,
+			dashHtml5Path: DASH_HTML5_PATH
 		}));
 	}
 
@@ -683,7 +683,7 @@ class StreamServer extends ServerBase {
 
 		html = "<html><head>";
 		html += "<title>" + item.params.name + "</title>";
-		html += "<script type=\"text\/javascript\" src=\"/streamserver/dash.all.min.js\"></script>";
+		html += "<script type=\"text\/javascript\" src=\"" + WEBROOT_PATH + "/dash.all.min.js\"></script>";
 		html += "</head><body><h2>" + item.params.name + "</h2>";
 		html += "<video data-dashjs-player autoplay src=\"" + mpdurl + "\" autobuffer=\"true\" controls=\"true\"></video>";
 		html += "</body></html>";
@@ -708,8 +708,8 @@ class StreamServer extends ServerBase {
 			}
 
 			data = data.toString ();
-			data = data.replace (/init-stream\$RepresentationID\$.m4s/g, "/streamserver/segment.m4s?streamId=" + cmdInv.params.streamId + "&amp;representationIndex=$$RepresentationID$$&amp;segmentIndex=0");
-			data = data.replace (/chunk-stream\$RepresentationID\$-\$Number%05d\$.m4s/g, "/streamserver/segment.m4s?streamId=" + cmdInv.params.streamId + "&amp;representationIndex=$$RepresentationID$$&amp;segmentIndex=$$Number%05d$$");
+			data = data.replace (/init-stream\$RepresentationID\$.m4s/g, DASH_SEGMENT_PATH + "?streamId=" + cmdInv.params.streamId + "&amp;representationIndex=$$RepresentationID$$&amp;segmentIndex=0");
+			data = data.replace (/chunk-stream\$RepresentationID\$-\$Number%05d\$.m4s/g, DASH_SEGMENT_PATH + "?streamId=" + cmdInv.params.streamId + "&amp;representationIndex=$$RepresentationID$$&amp;segmentIndex=$$Number%05d$$");
 
 			response.setHeader ("Content-Type", "dash/xml");
 			App.systemAgent.endRequest (request, response, 200, data);
@@ -756,50 +756,7 @@ class StreamServer extends ServerBase {
 		}
 
 		path = Path.join (this.configureMap.dataPath, item.params.id, App.STREAM_DASH_PATH, filename);
-		Fs.stat (path, (err, stats) => {
-			let stream, isopen;
-
-			if (err != null) {
-				Log.err (`${this.toString ()} failed to read DASH segment file; path=${path} err=${err}`);
-				App.systemAgent.endRequest (request, response, 404, "Not found");
-				return;
-			}
-
-			if (! stats.isFile ()) {
-				Log.err (`${this.toString ()} failed to read DASH segment file; path=${path} err=Not a regular file`);
-				App.systemAgent.endRequest (request, response, 404, "Not found");
-				return;
-			}
-
-			isopen = false;
-			stream = Fs.createReadStream (path, { });
-			stream.on ("error", (err) => {
-				Log.err (`${this.toString ()} failed to read DASH segment file; path=${path} err=${err}`);
-				if (! isopen) {
-					App.systemAgent.endRequest (request, response, 500, "Internal server error");
-				}
-			});
-
-			stream.on ("open", () => {
-				if (isopen) {
-					return;
-				}
-
-				isopen = true;
-				response.statusCode = 200;
-				response.setHeader ("Content-Type", "video/mp4");
-				response.setHeader ("Content-Length", stats.size);
-				stream.pipe (response);
-				stream.on ("finish", () => {
-					response.end ();
-				});
-
-				response.socket.setMaxListeners (0);
-				response.socket.once ("error", (err) => {
-					stream.close ();
-				});
-			});
-		});
+		App.systemAgent.writeFileResponse (request, response, path, "video/mp4");
 	}
 
 	// Handle a request with a GetHlsManifest command
@@ -870,65 +827,17 @@ class StreamServer extends ServerBase {
 
 		item = this.streamMap[cmdInv.params.streamId];
 		if (item == null) {
-			response.statusCode = 404;
-			response.end ();
+			App.systemAgent.endRequest (request, response, 404, "Not found");
 			return;
 		}
 
 		if (cmdInv.params.segmentIndex >= item.params.segmentCount) {
-			response.statusCode = 404;
-			response.end ();
+			App.systemAgent.endRequest (request, response, 404, "Not found");
 			return;
 		}
 
 		path = Path.join (this.configureMap.dataPath, cmdInv.params.streamId, App.STREAM_HLS_PATH, item.params.segmentFilenames[cmdInv.params.segmentIndex]);
-		Fs.stat (path, (err, stats) => {
-			let stream, isopen;
-
-			if (err != null) {
-				Log.err (`${this.toString ()} failed to read HLS segment file; path=${path} err=${err}`);
-				response.statusCode = 404;
-				response.end ();
-				return;
-			}
-
-			if (! stats.isFile ()) {
-				Log.err (`${this.toString ()} failed to read HLS segment file; path=${path} err=Not a regular file`);
-				response.statusCode = 404;
-				response.end ();
-				return;
-			}
-
-			isopen = false;
-			stream = Fs.createReadStream (path, { });
-			stream.on ("error", (err) => {
-				Log.err (`${this.toString ()} failed to read HLS segment file; path=${path} err=${err}`);
-				if (! isopen) {
-					response.statusCode = 500;
-					response.end ();
-				}
-			});
-
-			stream.on ("open", () => {
-				if (isopen) {
-					return;
-				}
-
-				isopen = true;
-				response.statusCode = 200;
-				response.setHeader ("Content-Type", "video/MP2T");
-				response.setHeader ("Content-Length", stats.size);
-				stream.pipe (response);
-				stream.on ("finish", () => {
-					response.end ();
-				});
-
-				response.socket.setMaxListeners (0);
-				response.socket.once ("error", (err) => {
-					stream.close ();
-				});
-			});
-		});
+		App.systemAgent.writeFileResponse (request, response, path, "video/MP2T");
 	}
 
 	// Handle a request with a GetThumbnailImage command
@@ -937,65 +846,17 @@ class StreamServer extends ServerBase {
 
 		item = this.streamMap[cmdInv.params.id];
 		if (item == null) {
-			response.statusCode = 404;
-			response.end ();
+			App.systemAgent.endRequest (request, response, 404, "Not found");
 			return;
 		}
 
 		if (cmdInv.params.thumbnailIndex >= item.params.segmentCount) {
-			response.statusCode = 404;
-			response.end ();
+			App.systemAgent.endRequest (request, response, 404, "Not found");
 			return;
 		}
 
 		path = Path.join (this.configureMap.dataPath, cmdInv.params.id, App.STREAM_THUMBNAIL_PATH, item.params.segmentFilenames[cmdInv.params.thumbnailIndex] + ".jpg");
-		Fs.stat (path, (err, stats) => {
-			let stream, isopen;
-
-			if (err != null) {
-				Log.err (`${this.toString ()} error reading thumbnail file; path=${path} err=${err}`);
-				response.statusCode = 404;
-				response.end ();
-				return;
-			}
-
-			if (! stats.isFile ()) {
-				Log.err (`${this.toString ()} error reading thumbnail file; path=${path} err=Not a regular file`);
-				response.statusCode = 404;
-				response.end ();
-				return;
-			}
-
-			isopen = false;
-			stream = Fs.createReadStream (path, { });
-			stream.on ("error", (err) => {
-				Log.err (`${this.toString ()} error reading thumbnail file; path=${path} err=${err}`);
-				if (! isopen) {
-					response.statusCode = 500;
-					response.end ();
-				}
-			});
-
-			stream.on ("open", () => {
-				if (isopen) {
-					return;
-				}
-
-				isopen = true;
-				response.statusCode = 200;
-				response.setHeader ("Content-Type", "image/jpeg");
-				response.setHeader ("Content-Length", stats.size);
-				stream.pipe (response);
-				stream.on ("finish", () => {
-					response.end ();
-				});
-
-				response.socket.setMaxListeners (0);
-				response.socket.once ("error", (err) => {
-					stream.close ();
-				});
-			});
-		});
+		App.systemAgent.writeFileResponse (request, response, path, "image/jpeg");
 	}
 }
 module.exports = StreamServer;

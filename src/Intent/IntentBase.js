@@ -1,6 +1,5 @@
 /*
-* Copyright 2019 Membrane Software <author@membranesoftware.com>
-*                 https://membranesoftware.com
+* Copyright 2018-2019 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are met:
@@ -60,9 +59,6 @@ class IntentBase {
 
 		// Set this value to specify whether the intent should be active. If inactive, the intent does not execute its update loop.
 		this.isActive = true;
-
-		// Set this value to specify the intent's description
-		this.description = "";
 
 		// An object used for holding persistent state associated with the intent, to be written as a record in the data store. Note that a MongoDB data store limits records to 16MB in size; intents should take care to keep state data below that maximum.
 		this.state = { };

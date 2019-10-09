@@ -27,39 +27,22 @@
 * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 * POSSIBILITY OF SUCH DAMAGE.
 */
-// Class that holds intent type data
+// Utility functions for manipulating strings
 
 "use strict";
 
 const App = global.App || { };
-const Result = require (App.SOURCE_DIRECTORY + "/Result");
-const IntentTypes = require ("./types");
 
-function Intent () {
+// Return the provided string with a capitalized first letter
+exports.capitalized = function (str) {
+	let s;
 
-}
-
-module.exports = Intent;
-
-Intent.IntentTypes = IntentTypes;
-exports.IntentTypes = IntentTypes;
-
-// createIntent - Return a newly created intent of the specified type name and configure it with the provided object. Returns null if the intent could not be created, indicating that the type name was not found or the configuration was not valid.
-Intent.createIntent = function (typeName, configureParams) {
-	let itype, intent;
-
-	itype = Intent.IntentTypes[typeName];
-	if (itype == null) {
-		return (null);
+	s = str;
+	if (s.length <= 0) {
+		return (s);
 	}
-
-	intent = new itype ();
-	if ((typeof configureParams != "object") || (configureParams == null)) {
-		configureParams = { };
+	if (s.length == 1) {
+		return (s.toUpperCase ());
 	}
-	if (intent.configure (configureParams) != Result.SUCCESS) {
-		return (null);
-	}
-
-	return (intent);
+	return (s.substring (0, 1).toUpperCase () + s.substring (1));
 };
