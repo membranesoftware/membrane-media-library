@@ -33,7 +33,7 @@
 
 const Path = require ("path");
 
-exports.VERSION = "15-stable-c2ccb78b";
+exports.VERSION = "16-stable-a29b85bf";
 exports.AGENT_PLATFORM = "";
 
 exports.BASE_DIRECTORY = process.cwd ();

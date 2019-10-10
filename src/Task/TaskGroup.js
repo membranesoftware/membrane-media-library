@@ -91,7 +91,6 @@ class TaskGroup {
 					mintask = task;
 				}
 			}
-
 			if (mintask == null) {
 				break;
 			}
@@ -99,6 +98,9 @@ class TaskGroup {
 			mintask.run ();
 			if (! mintask.isRunning) {
 				this.removeTask (mintask.id);
+			}
+			else {
+				++(this.runCount);
 			}
 		}
 

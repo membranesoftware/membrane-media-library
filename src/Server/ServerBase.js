@@ -198,7 +198,7 @@ class ServerBase {
 		fields[this.getAgentStatusKey ()] = cmd.params;
 	}
 
-	// Return a boolean value indicating if the provided AgentStatus command indicates a server status change
+	// Return a boolean value indicating if the provided AgentStatus command contains a server status change
 	findStatusChange (agentStatus) {
 		if (! this.isRunning) {
 			return (false);
@@ -207,7 +207,7 @@ class ServerBase {
 		return (this.doFindStatusChange (agentStatus));
 	}
 
-	// Return a boolean value indicating if the provided AgentStatus command contains subclass-specific fields indicating a server status change
+	// Return a boolean value indicating if the provided AgentStatus command contains a subclass-specific server status change
 	doFindStatusChange (agentStatus) {
 		// Default implementation returns false
 		return (false);
