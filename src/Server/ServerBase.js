@@ -109,7 +109,7 @@ class ServerBase {
 		this.doConfigure ();
 	}
 
-	// Subclass method. Implementations should execute actions appropriate when the server has been successfully configured
+	// Execute subclass-specific actions appropriate when the server has been successfully configured
 	doConfigure () {
 		// Default implementation does nothing
 	}

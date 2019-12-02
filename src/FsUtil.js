@@ -103,29 +103,7 @@ exports.createDirectory = function (path, endCallback) {
 
 // Synchronously read the contents of the specified configuration file and return an array of objects containing "type" and "params" fields for each the resulting lines. Lines containing only whitespace or beginning with a # character are ignored. Returns null if the file could not be read.
 exports.readConfigFile = function (filename) {
-	let hostname, prefix, suffix, pos, configdata, configs, parts, i, line, lineparts, type, params, j, keyparts;
-
-	pos = filename.lastIndexOf (".");
-	if (pos >= 0) {
-		hostname = Os.hostname ();
-		prefix = filename.substring (0, pos);
-		suffix = filename.substring (pos);
-
-		// Check for variations on the "filename-hostname.conf" scheme
-		line = prefix + "-" + hostname + suffix;
-		if (exports.fileExistsSync (line)) {
-			filename = line;
-		}
-		else {
-			pos = hostname.indexOf (".");
-			if (pos >= 0) {
-				line = prefix + "-" + hostname.substring (0, pos) + suffix;
-				if (exports.fileExistsSync (line)) {
-					filename = line;
-				}
-			}
-		}
-	}
+	let configdata, configs, parts, i, line, lineparts, type, params, j, keyparts;
 
 	try {
 		configdata = Fs.readFileSync (filename, { "encoding" : "UTF8" });
@@ -173,29 +151,7 @@ exports.readConfigFile = function (filename) {
 
 // Synchronously read the contents of the specified key-value pair configuration file and return an object containing the resulting fields. Lines containing only whitespace or beginning with a # character are ignored. Returns null if the file could not be read.
 exports.readConfigKeyFile = function (filename) {
-	let hostname, prefix, suffix, configdata, parts, i, line, pos, config;
-
-	pos = filename.lastIndexOf (".");
-	if (pos >= 0) {
-		hostname = Os.hostname ();
-		prefix = filename.substring (0, pos);
-		suffix = filename.substring (pos);
-
-		// Check for variations on the "filename-hostname.conf" scheme
-		line = prefix + "-" + hostname + suffix;
-		if (exports.fileExistsSync (line)) {
-			filename = line;
-		}
-		else {
-			pos = hostname.indexOf (".");
-			if (pos >= 0) {
-				line = prefix + "-" + hostname.substring (0, pos) + suffix;
-				if (exports.fileExistsSync (line)) {
-					filename = line;
-				}
-			}
-		}
-	}
+	let configdata, parts, i, line, pos, config;
 
 	try {
 		configdata = Fs.readFileSync (filename, { "encoding" : "UTF8" });
@@ -392,7 +348,7 @@ exports.readFileLines = function (filename, dataCallback, endCallback) {
 				return;
 			}
 
-			parsedata += buffer.toString ();
+			parsedata += buffer.toString ("utf8", 0, bytesRead);
 			lines = [ ];
 			pos = 0;
 			while (true) {
@@ -785,53 +741,6 @@ exports.fileExistsSync = function (path) {
 	}
 
 	return ((stat != null) && stat.isFile ());
-};
-
-// Synchronously read the contents of the specified list configuration file and return an array containing the resulting values. Lines containing only whitespace or beginning with a # character are ignored. Returns null if the file could not be read.
-exports.readConfigListFile = function (filename) {
-	var hostname, prefix, suffix, pos, configdata, parts, i, line, pos, config;
-
-	pos = filename.lastIndexOf (".");
-	if (pos >= 0) {
-		hostname = Os.hostname ();
-		prefix = filename.substring (0, pos);
-		suffix = filename.substring (pos);
-
-		// Check for variations on the "filename-hostname.conf" scheme
-		line = prefix + "-" + hostname + suffix;
-		if (exports.fileExistsSync (line)) {
-			filename = line;
-		}
-		else {
-			pos = hostname.indexOf (".");
-			if (pos >= 0) {
-				line = prefix + "-" + hostname.substring (0, pos) + suffix;
-				if (exports.fileExistsSync (line)) {
-					filename = line;
-				}
-			}
-		}
-	}
-
-	try {
-		configdata = Fs.readFileSync (filename, { "encoding" : "UTF8" });
-	}
-	catch (e) {
-		Log.err (`Failed to read configuration file; path=${filename} err=${e}`);
-		return (null);
-	}
-
-	config = [ ];
-	parts = configdata.split ("\n");
-	for (i = 0; i < parts.length; ++i) {
-		line = parts[i].trim ();
-		if (line.match (/^\s*#/) || line.match (/^\s*$/)) {
-			continue;
-		}
-
-		config.push (line.trim ());
-	}
-	return (config);
 };
 
 // Rename a file and invoke endCallback (err) when complete. If endCallback is not provided, instead return a promise that resolves if the operation succeeds or rejects if it doesn't.

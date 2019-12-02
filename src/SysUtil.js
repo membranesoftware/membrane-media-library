@@ -27,18 +27,18 @@
 * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 * POSSIBILITY OF SUCH DAMAGE.
 */
-// Utility functions for manipulating maps
+// Utility functions for program logic
 
 "use strict";
 
 const App = global.App || { };
 
-// Return an item from the map, or undefined if the item wasn't found. If createFn is a function that returns an object, a new item is created instead.
-exports.getItem = function (map, key, createFn) {
-	var item;
+// Return an item from a map, or undefined if the item wasn't found. If createFn is a function that returns an object, use it to create a new map item if not found.
+exports.getMapItem = function (map, key, createFn) {
+	let item;
 
 	item = map[key];
-	if (item == null) {
+	if (item === undefined) {
 		if (typeof createFn == 'function') {
 			item = createFn ();
 			map[key] = item;

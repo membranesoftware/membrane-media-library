@@ -33,7 +33,7 @@
 
 const Path = require ("path");
 
-exports.VERSION = "16-stable-a29b85bf";
+exports.VERSION = "17-stable-f311aac6";
 exports.AGENT_PLATFORM = "";
 
 exports.BASE_DIRECTORY = process.cwd ();
@@ -61,6 +61,7 @@ exports.MAX_TASK_COUNT = 1;
 exports.INTENT_WRITE_PERIOD = 300; // seconds
 exports.FFMPEG_PATH = "";
 exports.OPENSSL_PATH = "";
+exports.APPLICATION_NEWS_URL = "https://membranesoftware.com/application-news/";
 exports.MONGOD_PATH = "/usr/bin/mongod";
 exports.STORE_PORT = 27017;
 exports.STORE_DATABASE = "membrane";

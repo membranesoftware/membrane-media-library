@@ -32,9 +32,11 @@
 "use strict";
 
 const App = global.App || { };
+const Path = require ("path");
+const Fs = require ("fs");
 const Log = require (App.SOURCE_DIRECTORY + "/Log");
-const SystemInterface = require (App.SOURCE_DIRECTORY + "/SystemInterface");
 const RepeatTask = require (App.SOURCE_DIRECTORY + "/RepeatTask");
+const FsUtil = require (App.SOURCE_DIRECTORY + "/FsUtil");
 const AgentControl = require (App.SOURCE_DIRECTORY + "/Intent/AgentControl");
 const Intent = require (App.SOURCE_DIRECTORY + "/Intent/Intent");
 
@@ -52,7 +54,7 @@ class IntentGroup {
 
 	// Start the intent group's operation
 	start () {
-		let state, intent;
+		let state, intent, data, lines, cmd;
 
 		state = App.systemAgent.runState.intentState;
 		if ((typeof state == "object") && (state != null)) {
@@ -66,6 +68,36 @@ class IntentGroup {
 					intent.agentControl = this.agentControl;
 					this.intentMap[intent.id] = intent;
 					if (intent.isActive) {
+						intent.start ();
+					}
+				}
+			}
+		}
+
+		if ((Object.values (this.intentMap).length <= 0) && FsUtil.fileExistsSync (Path.join (App.CONF_DIRECTORY, "intent.conf"))) {
+			try {
+				data = Fs.readFileSync (Path.join (App.CONF_DIRECTORY, "intent.conf"), { encoding: "UTF8" });
+				data = data.toString ();
+			}
+			catch (e) {
+				Log.err (`Failed to read configuration file; path=${Path.join (App.CONF_DIRECTORY, "intent.conf")} err=${e}`);
+				data = null;
+			}
+
+			if (data != null) {
+				lines = data.split ("\n");
+				for (let line of lines) {
+					line = line.trim ();
+					if (line.match (/^\s*#/) || line.match (/^\s*$/)) {
+						continue;
+					}
+
+					intent = Intent.createIntentFromCommand (line);
+					if (intent != null) {
+						intent.assignId ();
+						intent.agentControl = this.agentControl;
+						this.intentMap[intent.id] = intent;
+						Log.debug (`Create configuration intent; ${intent.toString ()}`);
 						intent.start ();
 					}
 				}
@@ -144,27 +176,20 @@ class IntentGroup {
 		this.writeStateTask.setNextRepeat (4800);
 	}
 
-	// Return an array containing all intent items matching the specified group name and optional active state
+	// Return an array containing all intent items. If groupName or isActive are provided, filter results by matching against those fields.
 	findIntents (groupName, isActive) {
-		let a, match;
+		let a;
 
 		a = [ ];
 		for (let intent of Object.values (this.intentMap)) {
-			match = false;
-			if (intent.groupName == groupName) {
-				if (typeof isActive != "boolean") {
-					match = true;
-				}
-				else {
-					if (intent.isActive == isActive) {
-						match = true;
-					}
-				}
+			if ((typeof groupName == "string") && (intent.groupName != groupName)) {
+				continue;
+			}
+			if ((typeof isActive == "boolean") && (intent.isActive != isActive)) {
+				continue;
 			}
 
-			if (match) {
-				a.push (intent);
-			}
+			a.push (intent);
 		}
 
 		return (a);

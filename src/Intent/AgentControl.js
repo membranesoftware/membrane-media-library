@@ -34,7 +34,7 @@
 const App = global.App || { };
 const Result = require (App.SOURCE_DIRECTORY + "/Result");
 const Log = require (App.SOURCE_DIRECTORY + "/Log");
-const MapUtil = require (App.SOURCE_DIRECTORY + "/MapUtil");
+const SysUtil = require (App.SOURCE_DIRECTORY + "/SysUtil");
 const SystemInterface = require (App.SOURCE_DIRECTORY + "/SystemInterface");
 const Agent = require (App.SOURCE_DIRECTORY + "/Intent/Agent");
 
@@ -53,7 +53,7 @@ class AgentControl {
 	updateAgentStatus (statusCommand) {
 		let agent;
 
-		agent = MapUtil.getItem (this.agentMap, statusCommand.params.id, () => {
+		agent = SysUtil.getMapItem (this.agentMap, statusCommand.params.id, () => {
 			return (new Agent ());
 		});
 		agent.updateStatus (statusCommand);

@@ -33,6 +33,7 @@
 
 const App = global.App || { };
 const Result = require (App.SOURCE_DIRECTORY + "/Result");
+const SystemInterface = require (App.SOURCE_DIRECTORY + "/SystemInterface");
 const IntentTypes = require ("./types");
 
 function Intent () {
@@ -44,16 +45,16 @@ module.exports = Intent;
 Intent.IntentTypes = IntentTypes;
 exports.IntentTypes = IntentTypes;
 
-// createIntent - Return a newly created intent of the specified type name and configure it with the provided object. Returns null if the intent could not be created, indicating that the type name was not found or the configuration was not valid.
+// Return a newly created intent of the specified type name and configure it with the provided object. Returns null if the intent could not be created, indicating that the type name was not found or the configuration was not valid.
 Intent.createIntent = function (typeName, configureParams) {
-	let itype, intent;
+	let type, intent;
 
-	itype = Intent.IntentTypes[typeName];
-	if (itype == null) {
+	type = Intent.IntentTypes[typeName];
+	if (type == null) {
 		return (null);
 	}
 
-	intent = new itype ();
+	intent = new type ();
 	if ((typeof configureParams != "object") || (configureParams == null)) {
 		configureParams = { };
 	}
@@ -62,4 +63,22 @@ Intent.createIntent = function (typeName, configureParams) {
 	}
 
 	return (intent);
+};
+
+// Return a newly created intent, as constructed with the provided command, or null if the intent could not be created.
+Intent.createIntentFromCommand = function (command) {
+	let cmd, intent;
+
+	cmd = SystemInterface.parseCommand (command);
+	if (SystemInterface.isError (cmd)) {
+		return (null);
+	}
+
+	for (let type of Object.values (Intent.IntentTypes)) {
+		intent = new type ();
+		if (intent.configureFromCommand (cmd) == Result.SUCCESS) {
+			return (intent);
+		}
+	}
+	return (null);
 };

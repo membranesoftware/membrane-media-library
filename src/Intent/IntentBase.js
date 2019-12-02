@@ -60,6 +60,9 @@ class IntentBase {
 		// Set this value to specify whether the intent should be active. If inactive, the intent does not execute its update loop.
 		this.isActive = true;
 
+		// Set this value to a command ID that should be used for configuring the intent with the configureFromCommand method
+		this.configureCommandId = -1;
+
 		// An object used for holding persistent state associated with the intent, to be written as a record in the data store. Note that a MongoDB data store limits records to 16MB in size; intents should take care to keep state data below that maximum.
 		this.state = { };
 
@@ -85,6 +88,18 @@ class IntentBase {
 	doConfigure (configParams) {
 		// Default implementation does nothing
 		return (Result.SUCCESS);
+	}
+
+	// Configure the intent's state using the provided command and return a Result value.
+	configureFromCommand (cmdInv) {
+		if (this.configureCommandId < 0) {
+			return (Result.ERROR_UNKNOWN_TYPE);
+		}
+		if (cmdInv.command != this.configureCommandId) {
+			return (Result.ERROR_INVALID_PARAMS);
+		}
+
+		return (this.configure (cmdInv.params));
 	}
 
 	// Return a string description of the intent
@@ -204,7 +219,7 @@ class IntentBase {
 		// Default implementation does nothing
 	}
 
-	// Return a boolean value indicating if the task's last update time indicates that the specified time period has elapsed. startTime and period are both measured in milliseconds.
+	// Return a boolean value indicating if the specified time period has elapsed, relative to the intent's update time. startTime and period are both measured in milliseconds.
 	hasTimeElapsed (startTime, period) {
 		let diff;
 
@@ -273,6 +288,19 @@ class IntentBase {
 		}
 
 		return (a);
+	}
+
+	// Return an object containing a command with the default agent prefix and the provided parameters, or null if the command could not be validated, in which case an error log message is generated
+	createCommand (commandName, commandType, commandParams) {
+		let cmd;
+
+		cmd = SystemInterface.createCommand (App.systemAgent.getCommandPrefix (), commandName, commandType, commandParams);
+		if (SystemInterface.isError (cmd)) {
+			Log.err (`${this.toString ()} failed to create command invocation; commandName=${commandName} err=${cmd}`);
+			return (null);
+		}
+
+		return (cmd);
 	}
 
 	// Choose an index at random from the provided choice array, while updating the array to track the chosen item. Returns the chosen index, or -1 if no choices were available

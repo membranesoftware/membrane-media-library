@@ -44,14 +44,17 @@ const RepeatTask = require (App.SOURCE_DIRECTORY + "/RepeatTask");
 const Task = require (App.SOURCE_DIRECTORY + "/Task/Task");
 const ServerBase = require (App.SOURCE_DIRECTORY + "/Server/ServerBase");
 
-const WEBROOT_PATH = "/str";
+const STREAM_WEBROOT_PATH = "/str";
 const THUMBNAIL_PATH = "/str/a.png";
-const HLS_HTML5_PATH = "/str/b.html";
-const HLS_STREAM_PATH = "/str/c.m3u8";
-const HLS_SEGMENT_PATH = "/str/d.ts";
-const DASH_HTML5_PATH = "/str/e";
-const DASH_MPD_PATH = "/str/f.mpd";
-const DASH_SEGMENT_PATH = "/str/g.m4s";
+const HLS_STREAM_PATH = "/str/b.m3u8";
+const HLS_SEGMENT_PATH = "/str/c.ts";
+const DASH_MPD_PATH = "/str/e.mpd";
+const DASH_SEGMENT_PATH = "/str/f.m4s";
+
+const CATALOG_WEBROOT_PATH = "/media";
+const CATALOG_DATA_PATH = "/media-data";
+const PLAYER_WEBROOT_PATH = "/play";
+
 const GET_DISK_SPACE_PERIOD = 7 * 60 * 1000; // milliseconds
 
 class StreamServer extends ServerBase {
@@ -156,32 +159,6 @@ class StreamServer extends ServerBase {
 				}
 			});
 
-			App.systemAgent.addSecondaryRequestHandler (HLS_HTML5_PATH, (cmdInv, request, response) => {
-				switch (cmdInv.command) {
-					case SystemInterface.CommandId.GetHlsHtml5Interface: {
-						this.handleGetHlsHtml5InterfaceRequest (cmdInv, request, response);
-						break;
-					}
-					default: {
-						App.systemAgent.endRequest (request, response, 400, "Bad request");
-						break;
-					}
-				}
-			});
-
-			App.systemAgent.addSecondaryRequestHandler (DASH_HTML5_PATH, (cmdInv, request, response) => {
-				switch (cmdInv.command) {
-					case SystemInterface.CommandId.GetDashHtml5Interface: {
-						this.handleGetDashHtml5InterfaceRequest (cmdInv, request, response);
-						break;
-					}
-					default: {
-						App.systemAgent.endRequest (request, response, 400, "Bad request");
-						break;
-					}
-				}
-			});
-
 			App.systemAgent.addSecondaryRequestHandler (DASH_MPD_PATH, (cmdInv, request, response) => {
 				switch (cmdInv.command) {
 					case SystemInterface.CommandId.GetDashMpd: {
@@ -199,7 +176,29 @@ class StreamServer extends ServerBase {
 				this.handleGetDashSegmentRequest (request, response);
 			});
 
-			App.systemAgent.addWebroot (WEBROOT_PATH, WEBROOT_PATH);
+			App.systemAgent.addSecondaryWebroot (STREAM_WEBROOT_PATH, STREAM_WEBROOT_PATH);
+			App.systemAgent.addSecondaryWebroot (PLAYER_WEBROOT_PATH, PLAYER_WEBROOT_PATH);
+			App.systemAgent.addSecondaryWebroot (CATALOG_WEBROOT_PATH, CATALOG_WEBROOT_PATH);
+			App.systemAgent.addSecondaryRequestHandler (CATALOG_DATA_PATH, (cmdInv, request, response) => {
+				switch (cmdInv.command) {
+					case SystemInterface.CommandId.FindItems: {
+						this.handleFindItemsRequest (cmdInv, request, response);
+						break;
+					}
+					case SystemInterface.CommandId.GetStreamItem: {
+						this.handleGetStreamItemRequest (cmdInv, request, response);
+						break;
+					}
+					case SystemInterface.CommandId.GetStatus: {
+						App.systemAgent.endRequest (request, response, 200, JSON.stringify (this.getStatus ()));
+						break;
+					}
+					default: {
+						App.systemAgent.endRequest (request, response, 400, "Bad request");
+						break;
+					}
+				}
+			});
 
 			App.systemAgent.runDataStore (() => {
 				this.readRecords ();
@@ -216,7 +215,8 @@ class StreamServer extends ServerBase {
 				});
 			}, GET_DISK_SPACE_PERIOD);
 
-			startCallback (null);
+			App.systemAgent.getApplicationNews ();
+			startCallback ();
 		}).catch ((err) => {
 			startCallback (err);
 		});
@@ -237,9 +237,9 @@ class StreamServer extends ServerBase {
 			freeStorage: this.freeStorage,
 			totalStorage: this.totalStorage,
 			hlsStreamPath: HLS_STREAM_PATH,
-			hlsHtml5Path: HLS_HTML5_PATH,
 			thumbnailPath: THUMBNAIL_PATH,
-			dashHtml5Path: DASH_HTML5_PATH
+			htmlPlayerPath: PLAYER_WEBROOT_PATH,
+			htmlCatalogPath: CATALOG_WEBROOT_PATH
 		}));
 	}
 
@@ -634,37 +634,92 @@ class StreamServer extends ServerBase {
 		}));
 	}
 
-	// Handle a request with a GetHlsHtml5Interface command
-	handleGetHlsHtml5InterfaceRequest (cmdInv, request, response) {
-		let item, html, streamurl, streamcmd;
+	// Handle a request with a FindItems command
+	handleFindItemsRequest (cmdInv, request, response) {
+		let ds, crit, sort, findresult;
 
-		item = this.streamMap[cmdInv.params.streamId];
-		if (item == null) {
-			App.systemAgent.endRequest (request, response, 404, "Not found");
-			return;
-		}
+		App.systemAgent.openDataStore ().then ((dataStore) => {
+			ds = dataStore;
+			crit = {
+				command: SystemInterface.CommandId.StreamItem
+			};
+			if ((cmdInv.params.searchKey != "") && (cmdInv.params.searchKey != "*")) {
+				crit["params.name"] = {
+					"$regex": ds.getSearchKeyRegex (cmdInv.params.searchKey),
+					"$options": "i"
+				};
+			}
+			sort = {
+				"params.name": 1
+			};
+			findresult = {
+				searchKey: cmdInv.params.searchKey,
+				resultOffset: cmdInv.params.resultOffset,
+				streams: [ ]
+			};
+			return (ds.countRecords (crit));
+		}).then ((recordCount) => {
+			let max, skip, cmd;
 
-		streamurl = HLS_STREAM_PATH;
-		streamcmd = this.createCommand ("GetHlsManifest", SystemInterface.Constant.Stream, {
-			streamId: cmdInv.params.streamId,
-			startPosition: 0
-		});
-		if (streamcmd == null) {
+			max = null;
+			skip = null;
+			if (cmdInv.params.maxResults > 0) {
+				max = cmdInv.params.maxResults;
+			}
+			if (cmdInv.params.resultOffset > 0) {
+				skip = cmdInv.params.resultOffset;
+			}
+
+			findresult.setSize = recordCount;
+			if (recordCount <= 0) {
+				cmd = this.createCommand ("FindStreamsResult", SystemInterface.Constant.Stream, findresult);
+				if (cmd == null) {
+					App.systemAgent.endRequest (request, response, 500, "Internal server error");
+				}
+				else {
+					response.setHeader ("Content-Type", "application/json");
+					App.systemAgent.endRequest (request, response, 200, JSON.stringify (cmd));
+				}
+				return;
+			}
+
+			ds.findRecords ((err, record) => {
+				let summary;
+
+				if (err != null) {
+					Log.err (`${this.toString ()} FindItems command failed to execute; err=${err}`);
+					App.systemAgent.endRequest (request, response, 500, "Internal server error");
+					return;
+				}
+
+				if (record == null) {
+					cmd = this.createCommand ("FindStreamsResult", SystemInterface.Constant.Stream, findresult);
+					if (cmd == null) {
+						App.systemAgent.endRequest (request, response, 500, "Internal server error");
+					}
+					else {
+						response.setHeader ("Content-Type", "application/json");
+						App.systemAgent.endRequest (request, response, 200, JSON.stringify (cmd));
+					}
+					return;
+				}
+
+				SystemInterface.populateDefaultFields (record.params, SystemInterface.Type[record.commandName]);
+				summary = { };
+				for (let i of [ "id", "name", "duration", "width", "height", "size", "bitrate", "frameRate", "profile", "segmentCount" ]) {
+					summary[i] = record.params[i];
+				}
+				findresult.streams.push (summary);
+			}, crit, sort, max, skip);
+		}).catch ((err) => {
+			Log.err (`${this.toString ()} FindItems command failed to execute; err=${err}`);
 			App.systemAgent.endRequest (request, response, 500, "Internal server error");
-			return;
-		}
-		streamurl += "?" + SystemInterface.Constant.UrlQueryParameter + "=" + encodeURIComponent (JSON.stringify (streamcmd));
-		html = "<html><head><title>HLS - " + item.params.name + "</title></head>";
-		html += "<body><h2>" + item.params.name + "</h2>";
-		html += "<video src=\"" + streamurl + "\" autoplay=\"true\" autobuffer=\"true\" controls=\"true\"></video>";
-		html += "</body></html>";
-		response.setHeader ("Content-Type", "text/html");
-		App.systemAgent.endRequest (request, response, 200, html);
+		});
 	}
 
-	// Handle a request with a GetDashHtml5Interface command
-	handleGetDashHtml5InterfaceRequest (cmdInv, request, response) {
-		let item, html, cmd, mpdurl;
+	// Handle a request with a GetStreamItem command
+	handleGetStreamItemRequest (cmdInv, request, response) {
+		let item;
 
 		item = this.streamMap[cmdInv.params.streamId];
 		if (item == null) {
@@ -672,23 +727,8 @@ class StreamServer extends ServerBase {
 			return;
 		}
 
-		cmd = this.createCommand ("GetDashMpd", SystemInterface.Constant.Stream, {
-			streamId: cmdInv.params.streamId
-		});
-		if (cmd == null) {
-			App.systemAgent.endRequest (request, response, 500, "Internal server error");
-			return;
-		}
-		mpdurl = DASH_MPD_PATH + "?" + SystemInterface.Constant.UrlQueryParameter + "=" + encodeURIComponent (JSON.stringify (cmd));
-
-		html = "<html><head>";
-		html += "<title>" + item.params.name + "</title>";
-		html += "<script type=\"text\/javascript\" src=\"" + WEBROOT_PATH + "/dash.all.min.js\"></script>";
-		html += "</head><body><h2>" + item.params.name + "</h2>";
-		html += "<video data-dashjs-player autoplay src=\"" + mpdurl + "\" autobuffer=\"true\" controls=\"true\"></video>";
-		html += "</body></html>";
-		response.setHeader ("Content-Type", "text/html");
-		App.systemAgent.endRequest (request, response, 200, html);
+		response.setHeader ("Content-Type", "application/json");
+		App.systemAgent.endRequest (request, response, 200, JSON.stringify (item));
 	}
 
 	// Handle a request with a GetDashMpd command

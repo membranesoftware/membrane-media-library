@@ -82,7 +82,7 @@ class MediaServer extends ServerBase {
 				type: "number",
 				flags: SystemInterface.ParamFlag.Required | SystemInterface.ParamFlag.ZeroOrGreater,
 				description: "The interval to use for periodic scans of the media path, in seconds, or zero to disable periodic scans",
-				defaultValue: 900
+				defaultValue: 0
 			},
 			{
 				name: "mediaThumbnailCount",
@@ -204,7 +204,7 @@ class MediaServer extends ServerBase {
 	// Add subclass-specific fields to the provided server configuration object, covering default values not present in the delta configuration
 	doGetConfiguration (fields) {
 		if (typeof fields.scanPeriod != "number") {
-			fields.scanPeriod = 900;
+			fields.scanPeriod = 0;
 		}
 	}
 

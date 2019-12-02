@@ -73,6 +73,7 @@ class SystemAgent {
 
 		this.displayName = "";
 		this.applicationName = "";
+		this.userAgent = "";
 		this.urlHostname = "";
 		this.memoryFilePath = "";
 
@@ -104,8 +105,11 @@ class SystemAgent {
 		// A map of paths to functions for handling requests received by the secondary HTTP server
 		this.secondaryRequestHandlerMap = { };
 
+		// A map of URL paths to filesystem paths that should be handled as webroot requests by the main HTTP server
+		this.mainWebrootMap = { };
+
 		// A map of URL paths to filesystem paths that should be handled as webroot requests by the secondary HTTP server
-		this.webrootMap = { };
+		this.secondaryWebrootMap = { };
 
 		this.webrootContentTypeMap = {
 			".css": "text/css",
@@ -170,6 +174,7 @@ class SystemAgent {
 
 		this.isEnabled = App.AGENT_ENABLED;
 		this.applicationName = App.AGENT_APPLICATION_NAME;
+		this.userAgent = `${this.applicationName}/${App.VERSION}_${App.AGENT_PLATFORM}`;
 
 		if (App.AGENT_DISPLAY_NAME != null) {
 			this.displayName = App.AGENT_DISPLAY_NAME;
@@ -182,7 +187,7 @@ class SystemAgent {
 			}
 		}
 
-		serverconfigs = FsUtil.readConfigFile ("conf/server.conf");
+		serverconfigs = FsUtil.readConfigFile (Path.join (App.CONF_DIRECTORY, "server.conf"));
 		if (serverconfigs == null) {
 			serverconfigs = [ ];
 		}
@@ -262,7 +267,7 @@ class SystemAgent {
 			this.accessControl.start ();
 			this.taskGroup.start ();
 			this.intentGroup.start ();
-			if ((Object.keys (this.secondaryRequestHandlerMap).length > 0) || (Object.keys (this.webrootMap).length > 0)) {
+			if ((Object.keys (this.secondaryRequestHandlerMap).length > 0) || (Object.keys (this.secondaryWebrootMap).length > 0)) {
 				return (this.startSecondaryHttpServer ());
 			}
 		}).then (() => {
@@ -524,6 +529,28 @@ class SystemAgent {
 				resolve ();
 			};
 		}));
+	}
+
+	// Execute a request to check for application news from membranesoftware.com
+	getApplicationNews () {
+		let url;
+
+		url = `${App.APPLICATION_NEWS_URL}${App.VERSION}_${App.AGENT_PLATFORM}_${(App.LANGUAGE != "") ? App.LANGUAGE : "en"}`;
+		this.fetchUrlData (url).then ((urlData) => {
+			let cmdinv;
+
+			cmdinv = SystemInterface.parseCommand (urlData);
+			if (SystemInterface.isError (cmdinv) || (cmdinv.command != SystemInterface.CommandId.ApplicationNews)) {
+				throw Error ("Received non-parsing response data");
+			}
+			for (let item of cmdinv.params.items) {
+				if ((typeof item.actionTarget == "string") && item.actionTarget.match (/http.*\/update[^0-9a-zA-Z]/)) {
+					Log.notice (`${item.message} ${typeof item.actionText == "string" ? item.actionText + ": " : ""}${item.actionTarget}`);
+				}
+			}
+		}).catch ((err) => {
+			Log.warn (`Failed to check for application updates; err=${err}`);
+		});
 	}
 
 	// Return a promise that starts the main HTTP server if it isn't already running
@@ -941,7 +968,7 @@ class SystemAgent {
 		}
 
 		execute = (body) => {
-			let cmdinv, fn, responsedata, buffer;
+			let cmdinv, fn, responsedata, buffer, dirname, matches, filepath, contenttype;
 			fn = this.mainRequestHandlerMap[path];
 			if (fn != null) {
 				cmdinv = SystemInterface.parseCommand (body);
@@ -949,6 +976,52 @@ class SystemAgent {
 					cmdinv = { };
 				}
 				fn (cmdinv, request, response);
+				return;
+			}
+
+			dirname = path;
+			matches = dirname.match (/^([/][^/]*)[/].*$/);
+			if (matches != null) {
+				dirname = matches[1];
+			}
+
+			dirname = this.mainWebrootMap[dirname];
+			if (typeof dirname == "string") {
+				filepath = Path.join (App.WEBROOT_DIRECTORY, dirname);
+				if (path.length >= dirname.length) {
+					filepath = Path.join (filepath, Path.normalize (path.substring (dirname.length)));
+				}
+
+				Fs.stat (filepath, (err, stats) => {
+					if (err != null) {
+						this.endRequest (request, response, 404, "Not found");
+						return;
+					}
+					if (stats.isFile ()) {
+						contenttype = this.webrootContentTypeMap[Path.extname (filepath)];
+						this.writeFileResponse (request, response, filepath, (typeof contenttype == "string") ? contenttype : "application/octet-stream");
+						return;
+					}
+					if (! stats.isDirectory ()) {
+						this.endRequest (request, response, 404, "Not found");
+						return;
+					}
+
+					filepath = Path.normalize (Path.join (filepath, WEBROOT_INDEX_FILENAME));
+					Fs.stat (filepath, (err, stats) => {
+						if (err != null) {
+							this.endRequest (request, response, 404, "Not found");
+							return;
+						}
+						if (! stats.isFile ()) {
+							this.endRequest (request, response, 404, "Not found");
+							return;
+						}
+
+						contenttype = this.webrootContentTypeMap[Path.extname (filepath)];
+						this.writeFileResponse (request, response, filepath, (typeof contenttype == "string") ? contenttype : "application/octet-stream");
+					});
+				});
 				return;
 			}
 
@@ -1042,7 +1115,7 @@ class SystemAgent {
 				dirname = matches[1];
 			}
 
-			dirname = this.webrootMap[dirname];
+			dirname = this.secondaryWebrootMap[dirname];
 			if (typeof dirname != "string") {
 				this.endRequest (request, response, 404, "Not found");
 				return;
@@ -1251,15 +1324,26 @@ class SystemAgent {
 		}
 	}
 
-	// Set a webroot handler for the specified URL path and file path relative to the application webroot directory. If a request with a base path matching this URL path is received on the secondary HTTP server, it is handled by reading a webroot file.
-	addWebroot (urlPath, filePath) {
+	// Set a main server webroot handler for the specified URL path and file path, relative to the application webroot directory
+	addMainWebroot (urlPath, filePath) {
 		if (urlPath.indexOf ("/") != 0) {
 			urlPath = "/" + urlPath;
 		}
 		if (typeof filePath != "string") {
 			filePath = urlPath;
 		}
-		this.webrootMap[urlPath] = filePath;
+		this.mainWebrootMap[urlPath] = filePath;
+	}
+
+	// Set a secondary server webroot handler for the specified URL path and file path, relative to the application webroot directory
+	addSecondaryWebroot (urlPath, filePath) {
+		if (urlPath.indexOf ("/") != 0) {
+			urlPath = "/" + urlPath;
+		}
+		if (typeof filePath != "string") {
+			filePath = urlPath;
+		}
+		this.secondaryWebrootMap[urlPath] = filePath;
 		if (this.isStarted && (this.httpServer2 == null)) {
 			this.startSecondaryHttpServer ().then (() => { });
 		}
@@ -1656,7 +1740,8 @@ class SystemAgent {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json",
-				"Content-Length": postdata.length
+				"Content-Length": postdata.length,
+				"User-Agent": this.userAgent
 			}
 		}, requestComplete);
 		req.on ("error", requestError);
@@ -1895,7 +1980,10 @@ class SystemAgent {
 					method: "GET",
 					hostname: urlHostname,
 					port: tcpPort,
-					path: path
+					path: path,
+					headers: {
+						"User-Agent": this.userAgent
+					}
 				};
 				if (App.ENABLE_HTTPS) {
 					options.protocol = "https:";
@@ -1975,12 +2063,21 @@ class SystemAgent {
 	}
 
 	// Execute an HTTP GET operation for the provided URL and save response data into the specified path. Invokes endCallback (err, destFilename) when complete. If endCallback is not provided, instead return a Promise that executes the operation.
-	fetchUrlFile (url, targetDirectory, targetFilename, endCallback) {
+	fetchUrlFile (targetUrl, targetDirectory, targetFilename, endCallback) {
 		let execute = (executeCallback) => {
-			let httpreq, httpres, stream, tempfilename, destfilename;
+			let url, httpreq, httpres, stream, tempfilename, destfilename;
+
+			url = targetUrl;
+			if (typeof url == "string") {
+				url = Url.parse (url);
+				if (url == null) {
+					executeCallback (`Invalid URL, ${targetUrl}`, null);
+					return;
+				}
+			}
 
 			destfilename = null;
-			Log.debug2 (`fetchUrlFile; url=${url} targetDirectory=${targetDirectory} targetFilename=${targetFilename}`);
+			Log.debug2 (`fetchUrlFile; targetUrl=${targetUrl} targetDirectory=${targetDirectory} targetFilename=${targetFilename}`);
 			Fs.stat (targetDirectory, statTargetDirectoryComplete);
 			function statTargetDirectoryComplete (err, stats) {
 				if (err != null) {
@@ -2022,8 +2119,19 @@ class SystemAgent {
 			}
 
 			function fileOpened () {
+				let options;
+
+				options = {
+					hostname: url.hostname,
+					port: url.port,
+					path: url.path,
+					method: "GET",
+					headers: {
+						"User-Agent": App.systemAgent.userAgent
+					}
+				};
 				try {
-					httpreq = Http.get (url, requestStarted);
+					httpreq = Http.get (options, requestStarted);
 				}
 				catch (e) {
 					endRequest (e);
@@ -2118,14 +2226,37 @@ class SystemAgent {
 	}
 
 	// Execute an HTTP GET operation for the provided URL and save response data into a string. Invokes endCallback (err, urlData) when complete. If endCallback is not provided, instead return a Promise that executes the operation.
-	fetchUrlData (url, endCallback) {
+	fetchUrlData (targetUrl, endCallback) {
 		let execute = (executeCallback) => {
-			let httpreq, httpres, urldata;
+			let url, options, httpreq, httpres, urldata;
+
+			url = targetUrl;
+			if (typeof url == "string") {
+				url = Url.parse (url);
+				if (url == null) {
+					executeCallback (`Invalid URL, ${targetUrl}`, null);
+					return;
+				}
+			}
 
 			urldata = "";
-			Log.debug2 (`fetchUrlData; url=${url}`);
+			Log.debug2 (`fetchUrlData; targetUrl=${targetUrl}`);
 			try {
-				httpreq = Http.get (url, requestStarted);
+				options = {
+					hostname: url.hostname,
+					port: url.port,
+					path: url.path,
+					method: "GET",
+					headers: {
+						"User-Agent": this.userAgent
+					}
+				};
+				if (url.protocol.match (/^https(:){0,1}/)) {
+					httpreq = Https.get (options, requestStarted);
+				}
+				else {
+					httpreq = Http.get (options, requestStarted);
+				}
 			}
 			catch (e) {
 				endRequest (e);

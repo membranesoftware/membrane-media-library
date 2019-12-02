@@ -1,0 +1,50 @@
+<html>
+<head>
+	<link rel="stylesheet" type="text/css" href="/str/main.css"/>
+	<link rel="icon" type="image/png" href="/str/favicon.ico"/>
+	<script src="/play/main.js" type="text/javascript"></script>
+	<title>Membrane Media Library</title>
+</head>
+<body onload="main ();">
+	<div id="top-bar">
+		<span class="top-bar-logo-span">
+			<a href="https://membranesoftware.com/"><img src="/str/membranesoftware.png" alt="Membrane Software" /></a>
+		</span>
+		<span class="left-margin">&nbsp;</span>
+		<span class="top-bar-icon-span tooltip">
+			<a class="white-link" href="https://membranesoftware.com/news/"><i class="material-icons">&#xE7F4;</i></a>
+			<span class="tooltip-text tooltip-bottom-right small-fixed-size-text">News</span>
+		</span>
+		<span class="top-bar-icon-span tooltip">
+			<a class="white-link" href="https://membranesoftware.com/contact/"><i class="material-icons">&#xE2C9;</i></a>
+			<span class="tooltip-text tooltip-bottom-right small-fixed-size-text">Contact us</span>
+		</span>
+		<span class="top-bar-icon-span tooltip">
+			<a class="white-link" href="https://membranesoftware.com/i/"><i class="material-icons">&#xE887;</i></a>
+			<span class="tooltip-text tooltip-bottom-right small-fixed-size-text">Help / About</span>
+		</span>
+		<span class="top-bar-icon-span float-right right-padding green-text tooltip">
+			<a class="green-link" href="https://membranesoftware.com/contribute/"><i class="material-icons">&#xE89A;</i></a>
+			<span class="tooltip-text tooltip-bottom-left small-fixed-size-text">Contribute / Support us</span>
+		</span>
+	</div>
+	<div>
+		<span class="large-text" id="title-header"></span>
+	</div>
+	<div class="table-div">
+		<div class="table-row">
+			<div class="table-cell">
+				<video id="video-player" data-dashjs-player autoplay autobuffer="true" controls="true"></video>
+			</div>
+			<div class="table-cell">
+				<span class="tooltip">
+					<i class="material-icons large-text">&#xE410;</i>
+					<span class="tooltip-text tooltip-left small-fixed-size-text">Video attributes</span>
+				</span>
+			</div>
+			<div id="detail-div" class="table-cell">
+			</div>
+		</div>
+	</div>
+</body>
+</html>
