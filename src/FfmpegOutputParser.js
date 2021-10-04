@@ -1,5 +1,5 @@
 /*
-* Copyright 2018-2019 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
+* Copyright 2018-2021 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are met:
@@ -31,9 +31,6 @@
 
 "use strict";
 
-const App = global.App || { };
-const Log = require (App.SOURCE_DIRECTORY + "/Log");
-
 class FfmpegOutputParser {
 	constructor () {
 		// Read-only data members
@@ -42,16 +39,14 @@ class FfmpegOutputParser {
 
 	// Parse an array of strings containing ffmpeg output lines
 	parseLines (lines) {
-		let sections, m, hours, minutes, seconds;
-
-		for (let line of lines) {
-			sections = line.split ("\r");
-			for (let section of sections) {
-				m = section.match (/frame=.*\s+time=([0-9]+):([0-9]+):([0-9\.]+)\s+/);
+		for (const line of lines) {
+			const sections = line.split ("\r");
+			for (const section of sections) {
+				const m = section.match (/frame=.*\s+time=([0-9]+):([0-9]+):([0-9.]+)\s+/);
 				if (m != null) {
-					hours = parseFloat (m[1]);
-					minutes = parseFloat (m[2]);
-					seconds = parseFloat (m[3]);
+					const hours = parseFloat (m[1]);
+					const minutes = parseFloat (m[2]);
+					const seconds = parseFloat (m[3]);
 					if (!(isNaN (hours) || isNaN (minutes) || isNaN (seconds))) {
 						this.transcodePosition = Math.floor (seconds * 1000) + Math.floor (minutes * 60 * 1000) + Math.floor (hours * 3600 * 1000);
 					}

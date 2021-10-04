@@ -1,5 +1,5 @@
 /*
-* Copyright 2018-2019 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
+* Copyright 2018-2021 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are met:
@@ -30,19 +30,21 @@
 "use strict";
 
 const App = global.App || { };
-const Fs = require ("fs");
 const Path = require ("path");
-const Log = require (App.SOURCE_DIRECTORY + "/Log");
-const FsUtil = require (App.SOURCE_DIRECTORY + "/FsUtil");
-const SystemInterface = require (App.SOURCE_DIRECTORY + "/SystemInterface");
-const RepeatTask = require (App.SOURCE_DIRECTORY + "/RepeatTask");
-const FfprobeJsonParser = require (App.SOURCE_DIRECTORY + "/FfprobeJsonParser");
-const TaskBase = require (App.SOURCE_DIRECTORY + "/Task/TaskBase");
+const Log = require (Path.join (App.SOURCE_DIRECTORY, "Log"));
+const FsUtil = require (Path.join (App.SOURCE_DIRECTORY, "FsUtil"));
+const FfmpegUtil = require (Path.join (App.SOURCE_DIRECTORY, "FfmpegUtil"));
+const SystemInterface = require (Path.join (App.SOURCE_DIRECTORY, "SystemInterface"));
+const RepeatTask = require (Path.join (App.SOURCE_DIRECTORY, "RepeatTask"));
+const FfprobeJsonParser = require (Path.join (App.SOURCE_DIRECTORY, "FfprobeJsonParser"));
+const TaskBase = require (Path.join (App.SOURCE_DIRECTORY, "Task", "TaskBase"));
+
+const CountThumbnailFilesPeriod = 3000; // ms
 
 class ScanMediaFile extends TaskBase {
 	constructor () {
 		super ();
-		this.name = App.uiText.getText ("scanMediaFileTaskName");
+		this.name = App.uiText.getText ("ScanMediaFileTaskName");
 		this.resultObjectType = "MediaItem";
 
 		this.configureParams = [
@@ -97,142 +99,107 @@ class ScanMediaFile extends TaskBase {
 
 	// Subclass method. Implementations should execute task actions and call end when complete.
 	doRun () {
-		let record, parser, proc, statComplete, processData, processEnded, createThumbnailsComplete;
+		this.processFile ().catch ((err) => {
+			Log.err (`Failed to scan media file; filename="${this.configureMap.mediaPath}" err=${err}`);
+		}).then (() => {
+			this.end ();
+		});
+	}
 
-		setTimeout (() => {
-			Fs.stat (this.configureMap.mediaPath, statComplete);
-		}, 0);
-
-		statComplete = (err, stats) => {
-			if (err != null) {
-				Log.warn (`Failed to read media file; filename="${this.configureMap.mediaPath}" err=${err}`);
-				this.end ();
-				return;
-			}
-
-			record = {
-				id: this.configureMap.mediaId,
-				name: Path.basename (this.configureMap.mediaPath),
-				mediaPath: this.configureMap.mediaPath,
-				mtime: stats.mtime.getTime (),
-				duration: 0,
-				frameRate: 0,
-				width: 0,
-				height: 0,
-				size: stats.size,
-				bitrate: 0,
-				isCreateStreamAvailable: true
-			};
-
-			parser = new FfprobeJsonParser (this.configureMap.mediaPath);
-			proc = App.systemAgent.createFfprobeProcess ([
-				"-hide_banner",
-				"-loglevel", "quiet",
-				"-i", this.configureMap.mediaPath,
-				"-print_format", "json",
-				"-show_format",
-				"-show_streams"
-			], null, processData, processEnded);
+	async processFile () {
+		const stats = await FsUtil.statFile (this.configureMap.mediaPath);
+		const record = {
+			id: this.configureMap.mediaId,
+			name: Path.basename (this.configureMap.mediaPath),
+			mediaPath: this.configureMap.mediaPath,
+			mtime: stats.mtime.getTime (),
+			duration: 0,
+			frameRate: 0,
+			width: 0,
+			height: 0,
+			size: stats.size,
+			bitrate: 0,
+			isCreateStreamAvailable: true
 		};
-
-		processData = (lines, dataParseCallback) => {
+		const parser = new FfprobeJsonParser (this.configureMap.mediaPath);
+		const processData = (lines, dataParseCallback) => {
 			parser.parseLines (lines);
 			process.nextTick (dataParseCallback);
 		};
-		processEnded = (err) => {
-			if (err != null) {
-				Log.warn (`Failed to scan media file; filename="${this.configureMap.mediaPath}" err=${err}`);
-				this.end ();
-				return;
-			}
 
-			parser.close ();
-			Log.debug (`Media file scan complete; success=${parser.isParseSuccess} metadata=${parser.toString ()}`);
-			if (! parser.isParseSuccess) {
-				Log.warn (`Failed to scan media file; filename="${this.configureMap.mediaPath}" err="Media metadata not found"`);
-				this.end ();
-				return;
-			}
+		await FfmpegUtil.runFfprobe ([
+			"-hide_banner",
+			"-loglevel", "quiet",
+			"-i", this.configureMap.mediaPath,
+			"-print_format", "json",
+			"-show_format",
+			"-show_streams"
+		], null, processData);
 
-			record.duration = parser.duration;
-			record.frameRate = parser.frameRate;
-			record.width = parser.width;
-			record.height = parser.height;
-			record.bitrate = parser.bitrate;
-			this.sourceParser = parser;
-			this.addPercentComplete (this.progressPercentDelta);
-			this.createThumbnails (record, createThumbnailsComplete);
-		};
-
-		createThumbnailsComplete = (err) => {
-			if (err != null) {
-				this.end ();
-				return;
-			}
-
-			this.isSuccess = true;
-			this.setPercentComplete (100);
-			this.resultObject = record;
-			this.end ();
-		};
-	}
-
-	// Execute operations as needed to prepare thumbnail images for the provided MediaItem object, and invoke the provided callback when complete, with an "err" parameter (non-null if an error occurred)
-	createThumbnails (mediaItem, endCallback) {
-		let datapath, proc, processEnded;
-
-		if ((this.configureMap.mediaThumbnailCount <= 0) || (mediaItem.duration <= 0)) {
-			process.nextTick (endCallback);
-			return;
+		parser.close ();
+		if (! parser.isParseSuccess) {
+			throw Error ("Media metadata not found");
 		}
 
-		datapath = Path.join (this.configureMap.dataPath, mediaItem.id);
-		FsUtil.createDirectory (this.configureMap.dataPath).then (() => {
-			return (FsUtil.createDirectory (datapath));
-		}).then (() => {
-			this.thumbnailPath = Path.join (datapath, "thumbnail");
-			return (FsUtil.createDirectory (this.thumbnailPath));
-		}).then (() => {
-			let fps;
+		record.duration = parser.duration;
+		record.frameRate = parser.frameRate;
+		record.width = parser.width;
+		record.height = parser.height;
+		record.bitrate = parser.bitrate;
+		this.sourceParser = parser;
+		this.addPercentComplete (this.progressPercentDelta);
 
-			this.thumbnailCount = 0;
-			this.progressTask.setRepeating ((callback) => {
-				this.countThumbnailFiles (callback);
-			}, 3000);
+		const cmd = App.systemAgent.createCommand ("MediaItem", record);
+		if (cmd == null) {
+			throw Error ("Failed to create MediaItem record");
+		}
+		await this.createThumbnails (record);
+		await App.systemAgent.recordStore.upsertRecord ({
+			command: SystemInterface.CommandId.MediaItem,
+			"params.mediaPath": this.configureMap.mediaPath
+		}, cmd);
+		this.isSuccess = true;
+		this.setPercentComplete (100);
+		this.resultObject = record;
+	}
 
-			fps = this.sourceParser.duration / 1000;
-			fps /= this.configureMap.mediaThumbnailCount;
-			fps = 1 / fps;
-			proc = App.systemAgent.createFfmpegProcess ([
-				"-hide_banner",
-				"-i", mediaItem.mediaPath,
-				"-vcodec", "mjpeg",
-				"-vf", `fps=${fps}`,
-				"-vframes", this.configureMap.mediaThumbnailCount,
-				"-an",
-				"-y",
-				"-start_number", "0",
-				Path.join (this.thumbnailPath, `%d.jpg`)
-			], this.thumbnailPath, null, processEnded);
-		}).catch ((err) => {
-			endCallback (err);
-		});
+	// Prepare thumbnail images for the provided MediaItem object
+	async createThumbnails (mediaItem) {
+		let fps;
 
-		processEnded = (err) => {
-			if (err != null) {
-				endCallback (err);
-				return;
-			}
+		if ((this.configureMap.mediaThumbnailCount <= 0) || (mediaItem.duration <= 0)) {
+			return;
+		}
+		const datapath = Path.join (this.configureMap.dataPath, mediaItem.id);
+		await FsUtil.createDirectory (this.configureMap.dataPath);
+		await FsUtil.createDirectory (datapath);
+		this.thumbnailPath = Path.join (datapath, App.StreamThumbnailPath);
+		await FsUtil.createDirectory (this.thumbnailPath);
 
-			endCallback ();
-		};
+		this.thumbnailCount = 0;
+		this.progressTask.setRepeating ((callback) => {
+			this.countThumbnailFiles (callback);
+		}, CountThumbnailFilesPeriod);
+
+		fps = this.sourceParser.duration / 1000;
+		fps /= this.configureMap.mediaThumbnailCount;
+		fps = 1 / fps;
+		await FfmpegUtil.runFfmpeg ([
+			"-hide_banner",
+			"-i", mediaItem.mediaPath,
+			"-vcodec", "mjpeg",
+			"-vf", `fps=${fps}`,
+			"-vframes", this.configureMap.mediaThumbnailCount,
+			"-an",
+			"-y",
+			"-start_number", "0",
+			Path.join (this.thumbnailPath, "%d.jpg")
+		], this.thumbnailPath);
 	}
 
 	// Find thumbnail files created by the scan process and update task progress
 	countThumbnailFiles (endCallback) {
-		let filepath;
-
-		filepath = Path.join (this.thumbnailPath, `${this.thumbnailCount}.jpg`);
+		const filepath = Path.join (this.thumbnailPath, `${this.thumbnailCount}.jpg`);
 		FsUtil.fileExists (filepath, (err, exists) => {
 			if (err != null) {
 				this.progressTask.stop ();
@@ -249,7 +216,6 @@ class ScanMediaFile extends TaskBase {
 					}
 				}
 			}
-
 			endCallback ();
 		});
 	}

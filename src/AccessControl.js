@@ -1,5 +1,5 @@
 /*
-* Copyright 2018-2019 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
+* Copyright 2018-2021 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are met:
@@ -33,10 +33,9 @@
 
 const App = global.App || { };
 const Crypto = require ("crypto");
-const Result = require (App.SOURCE_DIRECTORY + "/Result");
-const Log = require (App.SOURCE_DIRECTORY + "/Log");
-const SystemInterface = require (App.SOURCE_DIRECTORY + "/SystemInterface");
-const RepeatTask = require (App.SOURCE_DIRECTORY + "/RepeatTask");
+const Path = require ("path");
+const SystemInterface = require (Path.join (App.SOURCE_DIRECTORY, "SystemInterface"));
+const RepeatTask = require (Path.join (App.SOURCE_DIRECTORY, "RepeatTask"));
 
 class AccessControl {
 	constructor () {
@@ -48,7 +47,7 @@ class AccessControl {
 	start () {
 		this.updateTask.setRepeating ((callback) => {
 			this.update (callback);
-		}, App.HEARTBEAT_PERIOD * 4, App.HEARTBEAT_PERIOD * 8);
+		}, App.HeartbeatPeriod * 4, App.HeartbeatPeriod * 8);
 	}
 
 	// Stop the access control's operations
@@ -59,13 +58,11 @@ class AccessControl {
 
 	// Update access control data as appropriate for current state and invoke the provided callback when complete
 	update (endCallback) {
-		let now, keys, session;
-
-		now = new Date ().getTime ();
-		keys = Object.keys (this.sessionMap);
-		for (let key of keys) {
-			session = this.sessionMap[key];
-			if ((session.sustainCount <= 0) && ((now - session.updateTime) >= App.AUTHORIZE_SESSION_DURATION)) {
+		const now = Date.now ();
+		const keys = Object.keys (this.sessionMap);
+		for (const key of keys) {
+			const session = this.sessionMap[key];
+			if ((session.sustainCount <= 0) && ((now - session.updateTime) >= App.AuthorizeSessionDuration)) {
 				delete (this.sessionMap[key]);
 			}
 		}
@@ -74,29 +71,33 @@ class AccessControl {
 
 	// Create a new authorization session using the provided Authorize command and return a response command
 	authorize (cmdInv) {
-		let hash, auth, token;
-
+		if ((typeof cmdInv != "object") || (cmdInv == null)) {
+			return (SystemInterface.createCommand ({ }, "CommandResult", {
+				success: false,
+				error: "Authorization failed"
+			}));
+		}
 		if (cmdInv.command != SystemInterface.CommandId.Authorize) {
-			return (SystemInterface.createCommand ({ }, "CommandResult", SystemInterface.Constant.DefaultCommandType, {
+			return (SystemInterface.createCommand ({ }, "CommandResult", {
 				success: false,
 				error: "Authorization failed"
 			}));
 		}
 		if (typeof cmdInv.prefix[SystemInterface.Constant.AuthorizationHashPrefixField] != "string") {
-			return (SystemInterface.createCommand ({ }, "CommandResult", SystemInterface.Constant.DefaultCommandType, {
+			return (SystemInterface.createCommand ({ }, "CommandResult", {
 				success: false,
 				error: "Authorization failed"
 			}));
 		}
-		if (cmdInv.params.token.length < App.AUTHORIZE_TOKEN_LENGTH) {
-			return (SystemInterface.createCommand ({ }, "CommandResult", SystemInterface.Constant.DefaultCommandType, {
+		if (cmdInv.params.token.length < App.AuthorizeTokenLength) {
+			return (SystemInterface.createCommand ({ }, "CommandResult", {
 				success: false,
 				error: "Authorization failed"
 			}));
 		}
 
-		hash = Crypto.createHash (SystemInterface.Constant.AuthorizationHashAlgorithm);
-		auth = SystemInterface.getCommandAuthorizationHash (cmdInv, App.AUTHORIZE_SECRET, null,
+		const hash = Crypto.createHash (SystemInterface.Constant.AuthorizationHashAlgorithm);
+		const auth = SystemInterface.getCommandAuthorizationHash (cmdInv, App.AuthorizeSecret, null,
 			(data) => {
 				hash.update (data);
 			},
@@ -105,21 +106,19 @@ class AccessControl {
 			}
 		);
 		if (auth != cmdInv.prefix[SystemInterface.Constant.AuthorizationHashPrefixField]) {
-			return (SystemInterface.createCommand ({ }, "CommandResult", SystemInterface.Constant.DefaultCommandType, {
+			return (SystemInterface.createCommand ({ }, "CommandResult", {
 				success: false,
 				error: "Authorization failed"
 			}));
 		}
 
-		token = this.createSession ();
-		return (SystemInterface.createCommand (App.systemAgent.getCommandPrefix (), "AuthorizeResult", SystemInterface.Constant.DefaultCommandType, {
+		const token = this.createSession ();
+		return (SystemInterface.createCommand (App.systemAgent.getCommandPrefix (), "AuthorizeResult", {
 			token: token
 		}));
 	}
 
 	isCommandAuthorized (cmdInv) {
-		let session, hash, auth;
-
 		if (typeof cmdInv.prefix[SystemInterface.Constant.AuthorizationHashPrefixField] != "string") {
 			return (false);
 		}
@@ -127,15 +126,15 @@ class AccessControl {
 			return (false);
 		}
 
-		session = this.sessionMap[cmdInv.prefix[SystemInterface.Constant.AuthorizationTokenPrefixField]];
+		const session = this.sessionMap[cmdInv.prefix[SystemInterface.Constant.AuthorizationTokenPrefixField]];
 		if (session == null) {
 			return (false);
 		}
 
 		// TODO: Possibly validate other prefix fields, such as create time
 
-		hash = Crypto.createHash (SystemInterface.Constant.AuthorizationHashAlgorithm);
-		auth = SystemInterface.getCommandAuthorizationHash (cmdInv, App.AUTHORIZE_SECRET, null,
+		const hash = Crypto.createHash (SystemInterface.Constant.AuthorizationHashAlgorithm);
+		const auth = SystemInterface.getCommandAuthorizationHash (cmdInv, App.AuthorizeSecret, null,
 			(data) => {
 				hash.update (data);
 			},
@@ -147,39 +146,37 @@ class AccessControl {
 			return (false);
 		}
 
-		session.updateTime = new Date ().getTime ();
+		session.updateTime = Date.now ();
 		return (true);
 	}
 
 	// Create a new entry in the session map and return the token value that was assigned
 	createSession () {
-		let token, now;
+		let token;
 
 		while (true) {
-			token = App.systemAgent.getRandomString (App.AUTHORIZE_TOKEN_LENGTH);
+			token = App.systemAgent.getRandomString (App.AuthorizeTokenLength);
 			if (this.sessionMap[token] == null) {
 				break;
 			}
 		}
 
-		now = new Date ().getTime ();
+		const now = Date.now ();
 		this.sessionMap[token] = {
 			createTime: now,
 			updateTime: now,
 			sustainCount: 0
 		};
+
 		return (token);
 	}
 
 	// Set the sustained state for the session referenced by the provided token. If enabled, the session does not expire by timeout.
 	setSessionSustained (sessionToken, isSustained) {
-		let session;
-
-		if (typeof sessionToken != "string") {
+		if ((typeof sessionToken != "string") || (sessionToken == "")) {
 			return;
 		}
-
-		session = this.sessionMap[sessionToken];
+		const session = this.sessionMap[sessionToken];
 		if (session == null) {
 			return;
 		}
@@ -193,8 +190,7 @@ class AccessControl {
 		if (session.sustainCount < 0) {
 			session.sustainCount = 0;
 		}
-
-		session.updateTime = new Date ().getTime ();
+		session.updateTime = Date.now ();
 	}
 }
 module.exports = AccessControl;

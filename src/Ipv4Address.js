@@ -1,5 +1,5 @@
 /*
-* Copyright 2018-2019 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
+* Copyright 2018-2021 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are met:
@@ -50,19 +50,17 @@ class Ipv4Address {
 
 	// Parse the provided address string and store the resulting values
 	parse (address) {
-		let match, i, num;
-
 		this.isValid = false;
 		if (typeof address != "string") {
 			return;
 		}
-		match = address.match (/^([0-9]+)\.([0-9]+)\.([0-9]+)\.([0-9]+)$/);
+		const match = address.match (/^([0-9]+)\.([0-9]+)\.([0-9]+)\.([0-9]+)$/);
 		if (match == null) {
 			return;
 		}
 		this.octets = [ ];
-		for (i = 1; i < 5; ++i) {
-			num = parseInt (match[i], 10);
+		for (let i = 1; i < 5; ++i) {
+			const num = parseInt (match[i], 10);
 			if (isNaN (num)) {
 				return;
 			}
@@ -78,18 +76,16 @@ class Ipv4Address {
 
 	// Set the netmask value associated with the address
 	setNetmask (netmask) {
-		let match, i, num;
-
 		if (typeof netmask != "string") {
 			return;
 		}
-		match = netmask.match (/^([0-9]+)\.([0-9]+)\.([0-9]+)\.([0-9]+)$/);
+		const match = netmask.match (/^([0-9]+)\.([0-9]+)\.([0-9]+)\.([0-9]+)$/);
 		if (match == null) {
 			return;
 		}
 		this.netmaskOctets = [ ];
-		for (i = 1; i < 5; ++i) {
-			num = parseInt (match[i], 10);
+		for (let i = 1; i < 5; ++i) {
+			const num = parseInt (match[i], 10);
 			if (isNaN (num)) {
 				return;
 			}
@@ -102,14 +98,13 @@ class Ipv4Address {
 
 	// Return a string containing the object's broadcast address, as composed from previously provided address and netmask values, or an empty string if the broadcast address could not be determined
 	getBroadcastAddress () {
-		let i, addr, num, inverse;
+		let num, inverse;
 
 		if ((! this.isValid) || (this.netmaskOctets.length != 4)) {
 			return ("");
 		}
-
-		addr = [ ];
-		for (i = 0; i < 4; ++i) {
+		const addr = [ ];
+		for (let i = 0; i < 4; ++i) {
 			num = this.octets[i];
 			num &= this.netmaskOctets[i];
 			inverse = ~(this.netmaskOctets[i]);
@@ -119,7 +114,6 @@ class Ipv4Address {
 			num >>>= 0;
 			addr.push (num);
 		}
-
 		return (addr.join ("."));
 	}
 
@@ -128,13 +122,10 @@ class Ipv4Address {
 		if (! this.isValid) {
 			return (false);
 		}
-
 		if ((this.octets[0] == 127) && (this.octets[1] == 0) && (this.octets[2] == 0) && (this.octets[3] == 1)) {
 			return (true);
 		}
-
 		return (false);
 	}
 }
-
 module.exports = Ipv4Address;

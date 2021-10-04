@@ -1,5 +1,5 @@
 /*
-* Copyright 2018-2019 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
+* Copyright 2018-2021 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are met:
@@ -29,18 +29,17 @@
 */
 // Parser for HLS index data
 
-const App = global.App || { };
-const Log = require (App.SOURCE_DIRECTORY + "/Log");
+"use strict";
 
 // Return an object containing records parsed from the provided index data, or null if the data could not be parsed
-function parse (indexData) {
-	var data, lines, i, line, m, lastduration, pos, val;
+exports.parse = (indexData) => {
+	let m, lastduration, pos, val;
 
 	if (typeof indexData != "string") {
 		return (null);
 	}
 
-	data = {
+	const data = {
 		segmentCount: 0,
 		segmentFilenames: [ ],
 		segmentLengths: [ ],
@@ -49,11 +48,11 @@ function parse (indexData) {
 	};
 	lastduration = null;
 	pos = 0;
-	lines = indexData.split ("\n");
-	for (i = 0; i < lines.length; ++i) {
-		line = lines[i];
+	const lines = indexData.split ("\n");
+	for (let i = 0; i < lines.length; ++i) {
+		const line = lines[i];
 
-		m = line.match (/^#EXTINF:([0-9\.]+)/);
+		m = line.match (/^#EXTINF:([0-9.]+)/);
 		if (m != null) {
 			lastduration = parseFloat (m[1]);
 			if (isNaN (lastduration)) {
@@ -90,5 +89,4 @@ function parse (indexData) {
 	}
 
 	return (data);
-}
-exports.parse = parse;
+};

@@ -1,5 +1,5 @@
 /*
-* Copyright 2018-2019 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
+* Copyright 2018-2021 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are met:
@@ -31,15 +31,14 @@
 
 const App = global.App || { };
 const Path = require ("path");
-const Log = require (App.SOURCE_DIRECTORY + "/Log");
-const FsUtil = require (App.SOURCE_DIRECTORY + "/FsUtil");
-const SystemInterface = require (App.SOURCE_DIRECTORY + "/SystemInterface");
-const TaskBase = require (App.SOURCE_DIRECTORY + "/Task/TaskBase");
+const Log = require (Path.join (App.SOURCE_DIRECTORY, "Log"));
+const SystemInterface = require (Path.join (App.SOURCE_DIRECTORY, "SystemInterface"));
+const TaskBase = require (Path.join (App.SOURCE_DIRECTORY, "Task", "TaskBase"));
 
 class GetDiskSpace extends TaskBase {
 	constructor () {
 		super ();
-		this.name = App.uiText.getText ("getDiskSpaceTaskName");
+		this.name = App.uiText.getText ("GetDiskSpaceTaskName");
 
 		this.configureParams = [
 			{
@@ -49,25 +48,64 @@ class GetDiskSpace extends TaskBase {
 				description: "The path to the target directory for the operation"
 			}
 		];
-
-		this.runSourcePath = Path.join (App.BIN_DIRECTORY, "GetDiskSpace_" + process.platform + ".js");
 	}
 
 	// Subclass method. Implementations should execute task actions and call end when complete.
 	doRun () {
-		FsUtil.fileExists (this.runSourcePath).then ((exists) => {
-			let fn;
+		let execpath, processData, found, total, used, free;
 
-			try {
-				fn = require (this.runSourcePath);
-			}
-			catch (e) {
-				return (Promise.reject (e));
-			}
+		const execargs = [ ];
+		if (App.IsWindows) {
+			execpath = "df.exe";
+			processData = (lines, dataParseCallback) => {
+				for (const line of lines) {
+					if (found) {
+						break;
+					}
+					const m = line.match (/^([0-9]+)\s+([0-9]+)\s+([0-9]+)/);
+					if (m != null) {
+						total = parseInt (m[1], 10) * 1024;
+						used = parseInt (m[2], 10) * 1024;
+						free = parseInt (m[3], 10) * 1024;
+						found = true;
+					}
+				}
+				process.nextTick (dataParseCallback);
+			};
+		}
+		else {
+			execpath = "/bin/df";
+			execargs.push ("-k");
+			processData = (lines, dataParseCallback) => {
+				for (const line of lines) {
+					if (found) {
+						break;
+					}
+					const m = line.match (/^(.*?)\s+([0-9]+)\s+([0-9]+)\s+([0-9]+)/);
+					if (m != null) {
+						total = parseInt (m[2], 10) * 1024;
+						used = parseInt (m[3], 10) * 1024;
+						free = parseInt (m[4], 10) * 1024;
+						found = true;
+					}
+				}
+				process.nextTick (dataParseCallback);
+			};
+		}
+		execargs.push (this.configureMap.targetPath);
 
-			return (fn (this));
-		}).then ((data) => {
-			this.resultObject = data;
+		App.systemAgent.runProcess (execpath, execargs, { }, null, processData).then ((isExitSuccess) => {
+			if (! isExitSuccess) {
+				throw Error ("df process failed");
+			}
+			if (! found) {
+				throw Error ("failed to gather disk space data");
+			}
+			this.resultObject = {
+				total: total,
+				used: used,
+				free: free
+			};
 			this.setPercentComplete (100);
 			this.isSuccess = true;
 		}).catch ((err) => {

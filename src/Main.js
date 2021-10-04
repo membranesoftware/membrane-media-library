@@ -1,5 +1,5 @@
 /*
-* Copyright 2018-2019 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
+* Copyright 2018-2021 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are met:
@@ -27,24 +27,36 @@
 * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 * POSSIBILITY OF SUCH DAMAGE.
 */
-// Main execution method
-
 "use strict";
 
 const App = require ("./App");
-const Log = require (App.SOURCE_DIRECTORY + "/Log");
-const Result = require (App.SOURCE_DIRECTORY + "/Result");
-const FsUtil = require (App.SOURCE_DIRECTORY + "/FsUtil");
-const SystemAgent = require (App.SOURCE_DIRECTORY + "/SystemAgent");
-const SystemInterface = require (App.SOURCE_DIRECTORY + "/SystemInterface");
-const UiText = require (App.SOURCE_DIRECTORY + "/UiText/UiText");
+const Path = require ("path");
+const Log = require (Path.join (App.SOURCE_DIRECTORY, "Log"));
+const FsUtil = require (Path.join (App.SOURCE_DIRECTORY, "FsUtil"));
+const SystemAgent = require (Path.join (App.SOURCE_DIRECTORY, "SystemAgent"));
+const SystemInterface = require (Path.join (App.SOURCE_DIRECTORY, "SystemInterface"));
+const UiText = require (Path.join (App.SOURCE_DIRECTORY, "UiText", "UiText"));
 
 process.setMaxListeners (0);
+process.on ("uncaughtException", (err) => {
+	if (err == null) {
+		err = new Error ();
+	}
+	Log.err (`Uncaught exception: ${err.toString ()}\nStack: ${err.stack}`);
+	process.exit (1);
+});
+process.on ("unhandledRejection", (err) => {
+	if (err == null) {
+		err = new Error ();
+	}
+	Log.err (`Unhandled promise rejection: ${err.toString ()}\nStack: ${err.stack}`);
+	process.exit (1);
+});
 
-let conf, fields, skiploglevel;
+let fields, skiploglevel;
 
 // Parameter fields for use in reading the systemagent configuration
-let configParams = [
+const configParams = [
 	{
 		name: "LogLevel",
 		type: "string",
@@ -122,6 +134,13 @@ let configParams = [
 		defaultValue: 60
 	},
 	{
+		name: "InvokeServerName",
+		type: "string",
+		flags: SystemInterface.ParamFlag.Required,
+		description: "The server name value that should be used for agent invocations",
+		defaultValue: ""
+	},
+	{
 		name: "Hostname",
 		type: "string",
 		flags: SystemInterface.ParamFlag.Required | SystemInterface.ParamFlag.Hostname,
@@ -171,6 +190,13 @@ let configParams = [
 		defaultValue: ""
 	},
 	{
+		name: "RecordStore",
+		type: "boolean",
+		flags: SystemInterface.ParamFlag.Required,
+		description: "A boolean value indicating if the agent should enable record store functionality",
+		defaultValue: false
+	},
+	{
 		name: "MongodPath",
 		type: "string",
 		flags: SystemInterface.ParamFlag.Required,
@@ -203,12 +229,15 @@ let configParams = [
 	{
 		name: "StoreRunPeriod",
 		type: "number",
-		flags: SystemInterface.ParamFlag.Required | SystemInterface.ParamFlag.GreaterThanZero,
-		description: "The interval to use for periodically relaunching the data store process if it isn't running, in seconds",
+		flags: SystemInterface.ParamFlag.Required | SystemInterface.ParamFlag.ZeroOrGreater,
+		description: "The interval to use for periodically relaunching the record store process if it isn't running, in seconds, or zero to disable launching of the record store process",
 		defaultValue: 60
 	}
 ];
 
+if (typeof process.env.LOG_MESSAGE_HOSTNAME == "string") {
+	Log.setMessageHostname (true);
+}
 skiploglevel = false;
 if (typeof process.env.LOG_LEVEL == "string") {
 	if (Log.setLevelByName (process.env.LOG_LEVEL)) {
@@ -218,22 +247,30 @@ if (typeof process.env.LOG_LEVEL == "string") {
 if (typeof process.env.LOG_CONSOLE == "string") {
 	Log.setConsoleOutput (true);
 }
+
 if (typeof process.env.DATA_DIRECTORY == "string") {
 	App.DATA_DIRECTORY = process.env.DATA_DIRECTORY;
 }
+else {
+	if (App.IsWindows && (typeof process.env.LOCALAPPDATA == "string")) {
+		App.DATA_DIRECTORY = Path.join (process.env.LOCALAPPDATA, App.APPLICATION_NAME);
+	}
+}
+
 if (typeof process.env.BIN_DIRECTORY == "string") {
 	App.BIN_DIRECTORY = process.env.BIN_DIRECTORY;
 }
 if (typeof process.env.CONF_DIRECTORY == "string") {
 	App.CONF_DIRECTORY = process.env.CONF_DIRECTORY;
 }
+Log.setFileOutput (true, (typeof process.env.LOG_FILENAME == "string") ? process.env.LOG_FILENAME : Path.join (App.DATA_DIRECTORY, "main.log"));
 
 fields = null;
-conf = FsUtil.readConfigKeyFile (App.CONFIG_FILE);
+const conf = FsUtil.readConfigKeyFile (App.CONFIG_FILE);
 if (conf != null) {
 	fields = SystemInterface.parseCommand (conf, configParams);
 	if (SystemInterface.isError (fields)) {
-		console.log ("Error in configuration file " + App.CONFIG_FILE + ": " + fields);
+		console.log (`Error in configuration file ${App.CONFIG_FILE}: ${fields}`);
 		process.exit (1);
 	}
 
@@ -245,63 +282,57 @@ if (conf != null) {
 	}
 
 	if (fields.Hostname != "") {
-		App.URL_HOSTNAME = fields.Hostname;
+		App.UrlHostname = fields.Hostname;
 	}
 	if (fields.AgentDisplayName != "") {
-		App.AGENT_DISPLAY_NAME = fields.AgentDisplayName;
+		App.AgentDisplayName = fields.AgentDisplayName;
 	}
-	App.AGENT_APPLICATION_NAME = fields.ApplicationName;
-	App.AGENT_ENABLED = fields.AgentEnabled;
-	App.UDP_PORT = fields.UdpPort;
-	App.TCP_PORT1 = fields.TcpPort1;
-	App.TCP_PORT2 = fields.TcpPort2;
-	App.LINK_PATH = fields.LinkPath;
-	App.ENABLE_HTTPS = fields.Https;
-	App.AUTHORIZE_PATH = fields.AuthorizePath;
-	App.AUTHORIZE_SECRET = fields.AuthorizeSecret;
-	App.AUTHORIZE_SESSION_DURATION = fields.AuthorizeSessionDuration * 1000;
-	App.MAX_TASK_COUNT = fields.MaxTaskCount;
-	App.FFMPEG_PATH = fields.FfmpegPath;
-	App.OPENSSL_PATH = fields.OpensslPath;
-	App.MONGOD_PATH = fields.MongodPath;
-	App.STORE_PORT = fields.StorePort;
-	App.STORE_DATABASE = fields.StoreDatabase;
-	App.STORE_COLLECTION = fields.StoreCollection;
-	App.STORE_RUN_PERIOD = fields.StoreRunPeriod;
-	App.LANGUAGE = fields.Language;
+	App.AgentApplicationName = fields.ApplicationName;
+	App.AgentEnabled = fields.AgentEnabled;
+	App.UdpPort = fields.UdpPort;
+	App.TcpPort1 = fields.TcpPort1;
+	App.TcpPort2 = fields.TcpPort2;
+	App.LinkPath = fields.LinkPath;
+	App.EnableHttps = fields.Https;
+	App.AuthorizePath = fields.AuthorizePath;
+	App.AuthorizeSecret = fields.AuthorizeSecret;
+	App.AuthorizeSessionDuration = fields.AuthorizeSessionDuration * 1000;
+	App.InvokeServerName = fields.InvokeServerName;
+	App.MaxTaskCount = fields.MaxTaskCount;
+	App.FfmpegPath = fields.FfmpegPath;
+	App.OpensslPath = fields.OpensslPath;
+	App.EnableRecordStore = fields.RecordStore;
+	App.MongodPath = fields.MongodPath;
+	App.StorePort = fields.StorePort;
+	App.StoreDatabase = fields.StoreDatabase;
+	App.StoreCollection = fields.StoreCollection;
+	App.StoreRunPeriod = fields.StoreRunPeriod;
+	App.Language = fields.Language;
 }
 
 // TODO: Check for an environment value specifying text language
-App.uiText = new UiText (App.LANGUAGE);
+App.uiText = new UiText (App.Language);
+
 App.systemAgent = new SystemAgent ();
-App.systemAgent.start (startComplete);
-function startComplete (err) {
+App.systemAgent.start ((err) => {
 	if (err != null) {
 		Log.err (`Failed to start Membrane Server; err=${err}`);
 		process.exit (1);
 	}
+	Log.info (`${App.AgentApplicationName} started; version=${App.VERSION} agentId=${App.systemAgent.agentId}`);
+	Log.notice (`${App.AgentApplicationName} ${App.uiText.getText ("AppStartMessage")}`);
+});
 
-	Log.info (`${App.AGENT_APPLICATION_NAME} started; version=${App.VERSION} serverAddress=${App.systemAgent.urlHostname}:${App.systemAgent.httpServerPort1} hostname=${App.systemAgent.urlHostname} tcpPort1=${App.systemAgent.httpServerPort1} tcpPort2=${App.systemAgent.httpServerPort2} agentId=${App.systemAgent.agentId}`);
-	Log.notice (`${App.AGENT_APPLICATION_NAME} ${App.uiText.getText ("appStartMessage")}`);
-}
-
-// Process event handlers
 process.on ("SIGINT", () => {
 	Log.notice ("Caught SIGINT, exit");
-	doExit ();
+	App.systemAgent.stop (() => {
+		process.exit (0);
+	});
 });
 
 process.on ("SIGTERM", () => {
 	Log.notice ("Caught SIGTERM, exit");
-	doExit ();
-});
-
-function doExit () {
-	App.systemAgent.stop (function () {
+	App.systemAgent.stop (() => {
 		process.exit (0);
 	});
-}
-
-process.on ("uncaughtException", (e) => {
-	Log.err (`Uncaught exception: ${e.toString ()}\nStack: ${e.stack}`);
 });

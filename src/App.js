@@ -1,5 +1,5 @@
 /*
-* Copyright 2018-2019 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
+* Copyright 2018-2021 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are met:
@@ -33,7 +33,9 @@
 
 const Path = require ("path");
 
-exports.VERSION = "17-stable-f311aac6";
+exports.APPLICATION_NAME = "Membrane Media Library";
+exports.APPLICATION_PACKAGE_NAME = "MembraneMediaLibrary";
+exports.VERSION = "21-stable-d77a122b";
 exports.AGENT_PLATFORM = "";
 
 exports.BASE_DIRECTORY = process.cwd ();
@@ -44,48 +46,53 @@ exports.CONF_DIRECTORY = Path.join (exports.BASE_DIRECTORY, "conf");
 exports.CONFIG_FILE = Path.join (exports.BASE_DIRECTORY, "conf", "systemagent.conf");
 exports.WEBROOT_DIRECTORY = Path.join (exports.BASE_DIRECTORY, "www");
 
-exports.AGENT_DISPLAY_NAME = null;
-exports.AGENT_APPLICATION_NAME = "Membrane Server";
-exports.AGENT_ENABLED = true;
-exports.URL_HOSTNAME = null;
-exports.TCP_PORT1 = 63738;
-exports.TCP_PORT2 = 63739;
-exports.UDP_PORT = 63738;
-exports.LINK_PATH = "/";
-exports.ENABLE_HTTPS = true;
-exports.AUTHORIZE_PATH = "auth";
-exports.AUTHORIZE_SECRET = "";
-exports.AUTHORIZE_TOKEN_LENGTH = 64;
-exports.AUTHORIZE_SESSION_DURATION = 60000; // milliseconds
-exports.MAX_TASK_COUNT = 1;
-exports.INTENT_WRITE_PERIOD = 300; // seconds
-exports.FFMPEG_PATH = "";
-exports.OPENSSL_PATH = "";
-exports.APPLICATION_NEWS_URL = "https://membranesoftware.com/application-news/";
-exports.MONGOD_PATH = "/usr/bin/mongod";
-exports.STORE_PORT = 27017;
-exports.STORE_DATABASE = "membrane";
-exports.STORE_COLLECTION = "records";
-exports.STORE_HOST = "127.0.0.1";
-exports.STORE_USERNAME = "";
-exports.STORE_PASSWORD = "";
-exports.STORE_RUN_PERIOD = 60; // seconds
-exports.HEARTBEAT_PERIOD = 500; // milliseconds
-exports.LANGUAGE = "";
+exports.AgentDisplayName = null;
+exports.AgentApplicationName = "Membrane Server";
+exports.AgentEnabled = true;
+exports.UrlHostname = null;
+exports.TcpPort1 = 63738;
+exports.TcpPort2 = 63739;
+exports.UdpPort = 63738;
+exports.LinkPath = "/";
+exports.EnableHttps = true;
+exports.AuthorizePath = "auth";
+exports.AuthorizeSecret = "";
+exports.AuthorizeTokenLength = 64;
+exports.AuthorizeSessionDuration = 60000; // milliseconds
+exports.InvokeServerName = "";
+exports.MaxTaskCount = 1;
+exports.FfmpegPath = "";
+exports.OpensslPath = "";
+exports.EnableRecordStore = false;
+exports.MongodPath = "/usr/bin/mongod";
+exports.StorePort = 27017;
+exports.StoreDatabase = "membrane";
+exports.StoreCollection = "records";
+exports.StoreHost = "127.0.0.1";
+exports.StoreUsername = "";
+exports.StorePassword = "";
+exports.StoreRunPeriod = 60; // seconds
+exports.Language = "";
 
-exports.OPENSSL_CONFIG_FILENAME = "openssl.cnf";
-exports.TLS_KEY_FILENAME = "tls-key.pem";
-exports.TLS_CSR_FILENAME = "tls-csr.pem";
-exports.TLS_CERT_FILENAME = "tls-cert.pem";
-
-exports.STREAM_CACHE_PATH = "stream-cache";
-exports.STREAM_HLS_PATH = "hls";
-exports.STREAM_DASH_PATH = "dash";
-exports.STREAM_THUMBNAIL_PATH = "thumbnail";
-exports.STREAM_HLS_INDEX_FILENAME = "index.m3u8";
-exports.STREAM_DASH_DESCRIPTION_FILENAME = "vod.mpd";
-exports.STREAM_RECORD_FILENAME = "record";
-
-exports.CAMERA_CACHE_PATH = "camera-cache";
+exports.IsWindows = Array.isArray (exports.AGENT_PLATFORM.match (/^win/i));
+exports.IsLinux = (process.platform === "linux");
+exports.IsMacos = (process.platform === "darwin");
+exports.ApplicationNewsUrl = "https://membranesoftware.com/application-news/";
+exports.HeartbeatPeriod = 500; // milliseconds
+exports.OpensslConfigFilename = "openssl.cnf";
+exports.TlsKeyFilename = "tls-key.pem";
+exports.TlsCsrFilename = "tls-csr.pem";
+exports.TlsCertFilename = "tls-cert.pem";
+exports.TlsCaPath = "/etc/ssl/certs/ca-certificates.crt";
+exports.Slash = "/";
+exports.DoubleSlash = `${exports.Slash}${exports.Slash}`;
+exports.StreamCachePath = "stream-cache";
+exports.StreamHlsPath = "hls";
+exports.StreamDashPath = "dash";
+exports.StreamThumbnailPath = "thumbnail";
+exports.StreamHlsIndexFilename = "index.m3u8";
+exports.StreamDashDescriptionFilename = "vod.mpd";
+exports.StreamRecordFilename = "record";
+exports.CameraCachePath = "camera-cache";
 
 global.App = exports;

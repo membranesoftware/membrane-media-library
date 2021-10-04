@@ -1,5 +1,5 @@
 /*
-* Copyright 2018-2019 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
+* Copyright 2018-2021 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are met:
@@ -29,7 +29,7 @@
 */
 "use strict";
 
-exports.appStartMessage = "is supported by donations from users like you. If you get utility and enjoyment from this application, please think about contributing money to support its development. Any amount helps! mbrn.tech/contribute";
-exports.getDiskSpaceTaskName = "Update storage space available";
-exports.createMediaStreamTaskName = "Create stream";
-exports.scanMediaFileTaskName = "Scan media file";
+exports.AppStartMessage = "is supported by donations from users like you. If you get utility and enjoyment from this application, please think about contributing money to support its development. Any amount helps! mbrn.tech/contribute";
+exports.GetDiskSpaceTaskName = "Update storage status";
+exports.CreateMediaStreamTaskName = "Create stream";
+exports.ScanMediaFileTaskName = "Scan media file";

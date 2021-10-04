@@ -1,5 +1,5 @@
 /*
-* Copyright 2018-2019 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
+* Copyright 2018-2021 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are met:
@@ -30,25 +30,81 @@
 "use strict";
 
 const App = global.App || { };
-const Fs = require ("fs");
 const Path = require ("path");
-const Log = require (App.SOURCE_DIRECTORY + "/Log");
-const SystemInterface = require (App.SOURCE_DIRECTORY + "/SystemInterface");
-const FsUtil = require (App.SOURCE_DIRECTORY + "/FsUtil");
-const FfprobeJsonParser = require (App.SOURCE_DIRECTORY + "/FfprobeJsonParser");
-const FfmpegOutputParser = require (App.SOURCE_DIRECTORY + "/FfmpegOutputParser");
-const HlsIndexParser = require (App.SOURCE_DIRECTORY + "/HlsIndexParser");
-const TaskBase = require (App.SOURCE_DIRECTORY + "/Task/TaskBase");
+const Log = require (Path.join (App.SOURCE_DIRECTORY, "Log"));
+const SystemInterface = require (Path.join (App.SOURCE_DIRECTORY, "SystemInterface"));
+const FsUtil = require (Path.join (App.SOURCE_DIRECTORY, "FsUtil"));
+const FfmpegUtil = require (Path.join (App.SOURCE_DIRECTORY, "FfmpegUtil"));
+const FfprobeJsonParser = require (Path.join (App.SOURCE_DIRECTORY, "FfprobeJsonParser"));
+const FfmpegOutputParser = require (Path.join (App.SOURCE_DIRECTORY, "FfmpegOutputParser"));
+const HlsIndexParser = require (Path.join (App.SOURCE_DIRECTORY, "HlsIndexParser"));
+const TaskBase = require (Path.join (App.SOURCE_DIRECTORY, "Task", "TaskBase"));
 
-const DEFAULT_VIDEO_CODEC = "libx264";
-const DEFAULT_AUDIO_CODEC = "aac";
+const DefaultVideoCodec = "libx264";
+const DefaultAudioCodec = "aac";
+
+const CodecMap = { };
+CodecMap.libx264 = {
+	options: [
+		"-profile:v", "high",
+		"-level", "4.2",
+		"-pix_fmt", "yuv420p"
+	]
+};
+
+const ProfileMap = { };
+ProfileMap[SystemInterface.Constant.SourceMatchStreamProfile] = {
+	videoCodecOptions: {
+		libx264: [ "-preset", "medium" ]
+	}
+};
+ProfileMap[SystemInterface.Constant.HighBitrateStreamProfile] = {
+	videoBitrate: 4096 * 1024,
+	maxFrameHeight: 1080,
+	videoCodecOptions: {
+		libx264: [ "-preset", "slow" ]
+	}
+};
+ProfileMap[SystemInterface.Constant.MediumBitrateStreamProfile] = {
+	videoBitrate: 2048 * 1024,
+	maxFrameHeight: 1080,
+	videoCodecOptions: {
+		libx264: [ "-preset", "medium" ]
+	}
+};
+ProfileMap[SystemInterface.Constant.LowBitrateStreamProfile] = {
+	videoBitrate: 1024 * 1024,
+	maxFrameHeight: 720,
+	videoCodecOptions: {
+		libx264: [ "-preset", "slow" ]
+	}
+};
+ProfileMap[SystemInterface.Constant.LowestBitrateStreamProfile] = {
+	videoBitrate: 512 * 1024,
+	maxFrameHeight: 480,
+	videoCodecOptions: {
+		libx264: [ "-preset", "slower" ]
+	}
+};
+ProfileMap[SystemInterface.Constant.PreviewStreamProfile] = {
+	videoBitrate: 512 * 1024,
+	maxFrameHeight: 480,
+	videoCodecOptions: {
+		libx264: [ "-preset", "faster" ]
+	}
+};
+ProfileMap[SystemInterface.Constant.FastPreviewStreamProfile] = {
+	videoBitrate: 512 * 1024,
+	maxFrameHeight: 480,
+	videoCodecOptions: {
+		libx264: [ "-preset", "ultrafast" ]
+	}
+};
 
 class CreateMediaStream extends TaskBase {
 	constructor () {
 		super ();
-		this.name = App.uiText.getText ("createMediaStreamTaskName");
-		this.resultObjectType = "StreamItem";
-		this.recordCommandType = SystemInterface.Constant.Stream;
+		this.name = App.uiText.getText ("CreateMediaStreamTaskName");
 
 		this.configureParams = [
 			{
@@ -116,471 +172,312 @@ class CreateMediaStream extends TaskBase {
 		this.subtitle = this.configureMap.streamName;
 		this.statusMap.streamName = this.configureMap.streamName;
 		this.streamDataPath = Path.join (this.configureMap.dataPath, this.configureMap.streamId);
+
+		if (ProfileMap[this.configureMap.profile] === undefined) {
+			this.configureMap.profile = SystemInterface.Constant.SourceMatchStreamProfile;
+		}
 	}
 
 	// Subclass method. Implementations should execute task actions and call end when complete.
 	doRun () {
-		// TODO: Fetch media data from a remote host if mediaPath holds a URL value
-		this.sourcePath = this.configureMap.mediaPath;
-
-		// TODO: Check isCancelled at each step
-		FsUtil.fileExists (this.sourcePath).then ((exists) => {
-			if (! exists) {
-				return (Promise.reject (Error ("Source media file not found")));
-			}
-
-			return (FsUtil.createDirectory (this.streamDataPath));
-		}).then (() => {
-			return (FsUtil.createDirectory (Path.join (this.streamDataPath, App.STREAM_HLS_PATH)));
-		}).then (() => {
-			return (FsUtil.createDirectory (Path.join (this.streamDataPath, App.STREAM_DASH_PATH)));
-		}).then (() => {
-			return (this.readSourceMetadata ());
-		}).then (() => {
-			let w, h, vb;
-
-			this.destMetadata = {
-				duration: this.sourceParser.duration
-			};
-
-			this.destMetadata.frameRate = this.sourceParser.frameRate;
-			if (this.destMetadata.frameRate > 29.97) {
-				this.destMetadata.frameRate = 29.97;
-			}
-
-			w = this.configureMap.mediaWidth;
-			h = this.configureMap.mediaHeight;
-			vb = this.sourceParser.videoBitrate;
-			switch (this.configureMap.profile) {
-				case SystemInterface.Constant.CompressedStreamProfile: {
-					vb = Math.floor (vb / 2);
-					if (vb < 1024) {
-						vb = 1024;
-					}
-					break;
-				}
-				case SystemInterface.Constant.LowQualityStreamProfile: {
-					w = Math.floor (w / 2);
-					h = Math.floor (h / 2);
-					w -= (w % 16);
-					h -= (h % 16);
-					if (w < 1) {
-						w = 1;
-					}
-					if (h < 1) {
-						h = 1;
-					}
-
-					vb = Math.floor (vb / 2);
-					if (vb < 1024) {
-						vb = 1024;
-					}
-					break;
-				}
-				case SystemInterface.Constant.LowestQualityStreamProfile: {
-					w = Math.floor (w / 4);
-					h = Math.floor (h / 4);
-					w -= (w % 16);
-					h -= (h % 16);
-					if (w < 1) {
-						w = 1;
-					}
-					if (h < 1) {
-						h = 1;
-					}
-
-					vb = Math.floor (vb / 4);
-					if (vb < 1024) {
-						vb = 1024;
-					}
-					break;
-				}
-				default: {
-					break;
-				}
-			}
-			this.destMetadata.width = w;
-			this.destMetadata.height = h;
-			this.destMetadata.videoBitrate = vb;
-
-			this.destMetadata.bitrate = this.sourceParser.bitrate;
-			this.destMetadata.bitrate -= (this.sourceParser.videoBitrate - vb);
-			if (this.destMetadata.bitrate < 1024) {
-				this.destMetadata.bitrate = 1024;
-			}
-
-			this.setPercentComplete (1);
-			this.minProgressPercent = 1;
-			this.maxProgressPercent = 46;
-			return (this.transcodeHlsStream ());
-		}).then (() => {
-			this.minProgressPercent = 47;
-			this.maxProgressPercent = 94;
-			return (this.transcodeDashStream ());
-		}).then (() => {
-			this.minProgressPercent = 95;
-			this.maxProgressPercent = 99;
-			return (this.createThumbnails ());
-		}).then (() => {
-			return (this.readHlsMetadata ());
-		}).then (() => {
-			return (this.computeStreamSize ());
-		}).then ((streamSize) => {
-			let params, streamitem;
-
-			params = {
-				id: this.configureMap.streamId,
-				name: this.configureMap.streamName,
-				sourceId: this.configureMap.mediaId,
-				duration: this.destMetadata.duration,
-				width: this.destMetadata.width,
-				height: this.destMetadata.height,
-				size: streamSize,
-				bitrate: this.destMetadata.bitrate,
-				frameRate: this.destMetadata.frameRate,
-				profile: this.configureMap.profile,
-				hlsTargetDuration: this.hlsMetadata.hlsTargetDuration,
-				segmentCount: this.hlsMetadata.segmentCount,
-				segmentFilenames: this.hlsMetadata.segmentFilenames,
-				segmentLengths: this.hlsMetadata.segmentLengths,
-				segmentPositions: this.hlsMetadata.segmentPositions
-			};
-
-			streamitem = SystemInterface.parseTypeObject ("StreamItem", params);
-			if (SystemInterface.isError (streamitem)) {
-				return (Promise.reject (Error ("Failed to store stream metadata, " + streamitem)));
-			}
-			this.setPercentComplete (100);
-			this.resultObject = streamitem;
-			this.isSuccess = true;
-		}).catch ((err) => {
-			Log.debug (`${this.toString ()} failed; err=${err}`);
+		this.createStream ().catch ((err) => {
+			Log.err (`Failed to create stream; streamName="${this.configureMap.streamName}" err=${err}`);
 		}).then (() => {
 			this.end ();
 		});
 	}
 
-	// Return a promise that reads metadata from the source media file and stores the resulting parser object in this.sourceParser
-	readSourceMetadata () {
-		return (new Promise ((resolve, reject) => {
-			let parser, proc, processData, processEnded;
+	async createStream () {
+		let w, h, vb;
 
-			setTimeout (() => {
-				parser = new FfprobeJsonParser (this.sourcePath);
-				proc = App.systemAgent.createFfprobeProcess ([
-					"-hide_banner",
-					"-loglevel", "quiet",
-					"-i", this.sourcePath,
-					"-print_format", "json",
-					"-show_format",
-					"-show_streams"
-				], this.streamDataPath, processData, processEnded);
-			}, 0);
+		// TODO: Fetch media data from a remote host if mediaPath holds a URL value
+		this.sourcePath = this.configureMap.mediaPath;
 
-			processData = (lines, dataParseCallback) => {
-				parser.parseLines (lines);
-				process.nextTick (dataParseCallback);
-			};
+		const exists = await FsUtil.fileExists (this.sourcePath);
+		if (! exists) {
+			throw Error ("Source media file not found");
+		}
 
-			processEnded = (err) => {
-				if (err != null) {
-					reject (err);
-					return;
+		await FsUtil.createDirectory (this.streamDataPath);
+		await FsUtil.createDirectory (Path.join (this.streamDataPath, App.StreamHlsPath));
+		await FsUtil.createDirectory (Path.join (this.streamDataPath, App.StreamDashPath));
+		await this.readSourceMetadata ();
+
+		this.destMetadata = {
+			duration: this.sourceParser.duration
+		};
+
+		this.destMetadata.frameRate = this.sourceParser.frameRate;
+		if (this.destMetadata.frameRate > 29.97) {
+			this.destMetadata.frameRate = 29.97;
+		}
+
+		w = this.configureMap.mediaWidth;
+		h = this.configureMap.mediaHeight;
+		vb = this.sourceParser.videoBitrate;
+
+		const profile = ProfileMap[this.configureMap.profile];
+		if (typeof profile.videoBitrate === "number") {
+			if (vb > profile.videoBitrate) {
+				vb = profile.videoBitrate;
+			}
+		}
+
+		if (typeof profile.maxFrameHeight === "number") {
+			if (h > profile.maxFrameHeight) {
+				const ratio = w / h;
+				h = profile.maxFrameHeight;
+				w = Math.floor (h * ratio);
+				w -= (w % 16);
+				h -= (h % 16);
+				if (w < 1) {
+					w = 1;
 				}
-
-				parser.close ();
-				if (! parser.isParseSuccess) {
-					reject (Error ("Media parse failed, metadata not found"));
-					return;
+				if (h < 1) {
+					h = 1;
 				}
+			}
+		}
 
-				this.sourceParser = parser;
-				resolve ();
-			};
-		}));
+		this.destMetadata.width = w;
+		this.destMetadata.height = h;
+		this.destMetadata.videoBitrate = vb;
+
+		this.destMetadata.bitrate = this.sourceParser.bitrate;
+		this.destMetadata.bitrate -= (this.sourceParser.videoBitrate - vb);
+		if (this.destMetadata.bitrate < 1024) {
+			this.destMetadata.bitrate = 1024;
+		}
+
+		this.setPercentComplete (1);
+		this.minProgressPercent = 1;
+		this.maxProgressPercent = 46;
+		await this.transcodeHlsStream ();
+
+		this.minProgressPercent = 47;
+		this.maxProgressPercent = 94;
+		await this.transcodeDashStream ();
+
+		this.minProgressPercent = 95;
+		this.maxProgressPercent = 99;
+		await this.createThumbnails ();
+		await this.readHlsMetadata ();
+		const params = {
+			id: this.configureMap.streamId,
+			name: this.configureMap.streamName,
+			sourceId: this.configureMap.mediaId,
+			duration: this.destMetadata.duration,
+			width: this.destMetadata.width,
+			height: this.destMetadata.height,
+			size: await this.computeStreamSize (),
+			bitrate: this.destMetadata.bitrate,
+			frameRate: this.destMetadata.frameRate,
+			profile: this.configureMap.profile,
+			hlsTargetDuration: this.hlsMetadata.hlsTargetDuration,
+			segmentCount: this.hlsMetadata.segmentCount,
+			segmentFilenames: this.hlsMetadata.segmentFilenames,
+			segmentLengths: this.hlsMetadata.segmentLengths,
+			segmentPositions: this.hlsMetadata.segmentPositions
+		};
+		const streamitem = App.systemAgent.createCommand ("StreamItem", params);
+		if (streamitem == null) {
+			throw Error ("Failed to create StreamItem command");
+		}
+		await App.systemAgent.recordStore.storeRecord (streamitem);
+		this.setPercentComplete (100);
+		this.isSuccess = true;
 	}
 
-	// Return a promise that executes the HLS transcode operation
-	transcodeHlsStream () {
-		return (new Promise ((resolve, reject) => {
-			let args, vcodec, parser, proc, processData, processEnded;
+	// Read metadata from the source media file and store the resulting parser object in this.sourceParser
+	async readSourceMetadata () {
+		const parser = new FfprobeJsonParser (this.sourcePath);
+		await FfmpegUtil.runFfprobe ([
+			"-hide_banner",
+			"-loglevel", "quiet",
+			"-i", this.sourcePath,
+			"-print_format", "json",
+			"-show_format",
+			"-show_streams"
+		], this.streamDataPath, (lines, dataParseCallback) => {
+			parser.parseLines (lines);
+			process.nextTick (dataParseCallback);
+		});
 
-			// TODO: Possibly assign a different video codec (defaulting to libx264)
-			vcodec = DEFAULT_VIDEO_CODEC;
-
-			args = [ ];
-			args.push ("-i", this.sourcePath);
-
-			this.addVideoProfileArguments (vcodec, args);
-
-			if (this.sourceParser.audioStreamIndex !== null) {
-				// TODO: Possibly assign a different audio codec (defaulting to aac)
-				args.push ("-acodec", DEFAULT_AUDIO_CODEC);
-			}
-
-			args.push ("-map", `0:${this.sourceParser.videoStreamIndex}`);
-			if (this.sourceParser.audioStreamIndex !== null) {
-				args.push ("-map", `0:${this.sourceParser.audioStreamIndex}`);
-			}
-
-			args.push ("-f", "ssegment");
-			args.push ("-segment_list", App.STREAM_HLS_INDEX_FILENAME);
-			args.push ("-segment_list_flags", "live");
-			args.push ("-segment_time", "2");
-			args.push ("%05d.ts");
-
-			setTimeout (() => {
-				parser = new FfmpegOutputParser ();
-				proc = App.systemAgent.createFfmpegProcess (args, Path.join (this.streamDataPath, App.STREAM_HLS_PATH), processData, processEnded);
-			}, 0);
-
-			processData = (lines, dataParseCallback) => {
-				parser.parseLines (lines);
-				if ((typeof this.sourceParser.duration == "number") && (typeof parser.transcodePosition == "number") && (this.sourceParser.duration > 0)) {
-					this.setPercentComplete (this.minProgressPercent + ((this.maxProgressPercent - this.minProgressPercent) * parser.transcodePosition / this.sourceParser.duration));
-				}
-				process.nextTick (dataParseCallback);
-			};
-
-			processEnded = (err, isExitSuccess) => {
-				if (err != null) {
-					reject (err);
-					return;
-				}
-
-				if (! isExitSuccess) {
-					reject (Error ("HLS transcode process failed"));
-					return;
-				}
-				this.setPercentComplete (this.maxProgressPercent);
-				resolve ();
-			}
-		}));
+		parser.close ();
+		if (! parser.isParseSuccess) {
+			throw Error ("Media parse failed, metadata not found");
+		}
+		this.sourceParser = parser;
 	}
 
-	transcodeDashStream () {
-		return (new Promise ((resolve, reject) => {
-			let args, vcodec, parser, proc, processData, processEnded;
+	// Execute the HLS transcode operation
+	async transcodeHlsStream () {
+		// TODO: Possibly assign a different video codec (defaulting to libx264)
+		const vcodec = DefaultVideoCodec;
 
-			// TODO: Possibly assign a different video codec (defaulting to libx264)
-			vcodec = DEFAULT_VIDEO_CODEC;
+		const args = [ ];
+		args.push ("-i", this.sourcePath);
 
-			args = [ ];
-			args.push ("-i", this.sourcePath);
+		this.addVideoProfileArguments (vcodec, args);
 
-			this.addVideoProfileArguments (vcodec, args);
+		if (this.sourceParser.audioStreamIndex !== null) {
+			// TODO: Possibly assign a different audio codec (defaulting to aac)
+			args.push ("-acodec", DefaultAudioCodec);
+		}
 
-			if (this.sourceParser.audioStreamIndex !== null) {
-				args.push ("-acodec");
+		args.push ("-map", `0:${this.sourceParser.videoStreamIndex}`);
+		if (this.sourceParser.audioStreamIndex !== null) {
+			args.push ("-map", `0:${this.sourceParser.audioStreamIndex}`);
+		}
 
-				// TODO: Possibly assign a different audio codec (defaulting to aac)
-				args.push (DEFAULT_AUDIO_CODEC);
+		args.push ("-f", "ssegment");
+		args.push ("-segment_list", App.StreamHlsIndexFilename);
+		args.push ("-segment_list_flags", "live");
+		args.push ("-segment_time", "2");
+		args.push ("%05d.ts");
+
+		const parser = new FfmpegOutputParser ();
+		const isExitSuccess = await FfmpegUtil.runFfmpeg (args, Path.join (this.streamDataPath, App.StreamHlsPath), (lines, dataParseCallback) => {
+			parser.parseLines (lines);
+			if ((typeof this.sourceParser.duration == "number") && (typeof parser.transcodePosition == "number") && (this.sourceParser.duration > 0)) {
+				this.setPercentComplete (this.minProgressPercent + ((this.maxProgressPercent - this.minProgressPercent) * parser.transcodePosition / this.sourceParser.duration));
 			}
+			process.nextTick (dataParseCallback);
+		});
+		if (! isExitSuccess) {
+			throw Error ("HLS transcode process failed");
+		}
+		this.setPercentComplete (this.maxProgressPercent);
+	}
 
-			args.push ("-map", `0:${this.sourceParser.videoStreamIndex}`);
-			if (this.sourceParser.audioStreamIndex !== null) {
-				args.push ("-map", `0:${this.sourceParser.audioStreamIndex}`);
+	// Execute the DASH transcode operation
+	async transcodeDashStream () {
+		// TODO: Possibly assign a different video codec (defaulting to libx264)
+		const vcodec = DefaultVideoCodec;
+
+		const args = [ ];
+		args.push ("-i", this.sourcePath);
+
+		this.addVideoProfileArguments (vcodec, args);
+
+		if (this.sourceParser.audioStreamIndex !== null) {
+			args.push ("-acodec");
+
+			// TODO: Possibly assign a different audio codec (defaulting to aac)
+			args.push (DefaultAudioCodec);
+		}
+
+		args.push ("-map", `0:${this.sourceParser.videoStreamIndex}`);
+		if (this.sourceParser.audioStreamIndex !== null) {
+			args.push ("-map", `0:${this.sourceParser.audioStreamIndex}`);
+		}
+
+		args.push ("-f", "dash");
+		args.push ("-adaptation_sets", "id=0,streams=v id=1,streams=a");
+		args.push ("-use_template", "1");
+		args.push (App.StreamDashDescriptionFilename);
+
+		const parser = new FfmpegOutputParser ();
+
+		const isExitSuccess = await FfmpegUtil.runFfmpeg (args, Path.join (this.streamDataPath, App.StreamDashPath), (lines, dataParseCallback) => {
+			parser.parseLines (lines);
+			if ((typeof this.sourceParser.duration == "number") && (typeof parser.transcodePosition == "number") && (this.sourceParser.duration > 0)) {
+				this.setPercentComplete (this.minProgressPercent + ((this.maxProgressPercent - this.minProgressPercent) * parser.transcodePosition / this.sourceParser.duration));
 			}
+			process.nextTick (dataParseCallback);
+		});
+		if (! isExitSuccess) {
+			throw Error ("DASH transcode process failed");
+		}
+		this.setPercentComplete (this.maxProgressPercent);
+	}
 
-			args.push ("-f", "dash");
-			args.push ("-adaptation_sets", "id=0,streams=v id=1,streams=a");
-			args.push ("-use_template", "1");
-			args.push (App.STREAM_DASH_DESCRIPTION_FILENAME);
+	// Generate thumbnail images from HLS transcode output
+	async createThumbnails () {
+		let lastthumbfile, count;
 
-			setTimeout (() => {
-				parser = new FfmpegOutputParser ();
-				proc = App.systemAgent.createFfmpegProcess (args, Path.join (this.streamDataPath, App.STREAM_DASH_PATH), processData, processEnded);
-			}, 0);
+		const files = await FsUtil.readDirectory (Path.join (this.streamDataPath, App.StreamHlsPath));
+		const segmentfiles = files.filter ((file) => {
+			return (file.match (/^[0-9]+\.ts$/) != null);
+		});
+		if (segmentfiles.length <= 0) {
+			return;
+		}
+		segmentfiles.sort ();
 
-			processData = (lines, dataParseCallback) => {
-				parser.parseLines (lines);
-				if ((typeof this.sourceParser.duration == "number") && (typeof parser.transcodePosition == "number") && (this.sourceParser.duration > 0)) {
-					this.setPercentComplete (this.minProgressPercent + ((this.maxProgressPercent - this.minProgressPercent) * parser.transcodePosition / this.sourceParser.duration));
+		await FsUtil.createDirectory (Path.join (this.streamDataPath, App.StreamThumbnailPath));
+		lastthumbfile = "";
+		count = 0;
+		for (const file of segmentfiles) {
+			const curthumbfile = Path.join (this.streamDataPath, App.StreamThumbnailPath, `${file}.jpg`);
+			const isExitSuccess = await FfmpegUtil.runFfmpeg ([
+				"-i", Path.join (this.streamDataPath, App.StreamHlsPath, file),
+				"-vcodec", "mjpeg",
+				"-vframes", "1",
+				"-an",
+				"-y", curthumbfile
+			], Path.join (this.streamDataPath, App.StreamHlsPath));
+			if (! isExitSuccess) {
+				if (lastthumbfile == "") {
+					throw Error ("Failed to generate thumbnail image");
 				}
-				process.nextTick (dataParseCallback);
-			};
-
-			processEnded = (err, isExitSuccess) => {
-				if (err != null) {
-					reject (err);
-					return;
-				}
-
-				if (! isExitSuccess) {
-					reject (Error ("DASH transcode process failed"));
-					return;
-				}
-				this.setPercentComplete (this.maxProgressPercent);
-				resolve ();
+				await FsUtil.copyFile (lastthumbfile, curthumbfile);
 			}
-		}));
+			this.setPercentComplete (this.minProgressPercent + ((this.maxProgressPercent - this.minProgressPercent) * count / segmentfiles.length));
+			lastthumbfile = curthumbfile;
+			++count;
+		}
 	}
 
-	// Return a promise that generates thumbnail images from HLS transcode output
-	createThumbnails () {
-		return (new Promise ((resolve, reject) => {
-			let segmentfiles, segmentindex, proc, createNextThumbnail, processEnded, copyComplete, curthumbfile, lastthumbfile;
-
-			lastthumbfile = "";
-			FsUtil.readDirectory (Path.join (this.streamDataPath, App.STREAM_HLS_PATH)).then ((files) => {
-				segmentfiles = [ ];
-				for (let file of files) {
-					if (file.match (/^[0-9]+\.ts$/)) {
-						segmentfiles.push (file);
-					}
-				}
-				segmentfiles.sort ();
-
-				return (FsUtil.createDirectory (Path.join (this.streamDataPath, App.STREAM_THUMBNAIL_PATH)));
-			}).then (() => {
-				segmentindex = -1;
-				createNextThumbnail ();
-			}).catch ((err) => {
-				reject (err);
-			});
-
-			createNextThumbnail = () => {
-				++segmentindex;
-				if (segmentindex >= segmentfiles.length) {
-					resolve ();
-					return;
-				}
-
-				curthumbfile = Path.join (this.streamDataPath, App.STREAM_THUMBNAIL_PATH, segmentfiles[segmentindex] + ".jpg");
-				proc = App.systemAgent.createFfmpegProcess ([
-					"-i", Path.join (this.streamDataPath, App.STREAM_HLS_PATH, segmentfiles[segmentindex]),
-					"-vcodec", "mjpeg",
-					"-vframes", "1",
-					"-an",
-					"-y",
-					curthumbfile
-				], Path.join (this.streamDataPath, App.STREAM_HLS_PATH), null, processEnded);
-			};
-
-			processEnded = (err, isExitSuccess) => {
-				if (err != null) {
-					reject (err);
-					return;
-				}
-
-				if (! isExitSuccess) {
-					if (lastthumbfile == "") {
-						reject (Error ("Failed to generate thumbnail image"));
-						return;
-					}
-
-					Fs.copyFile (lastthumbfile, curthumbfile, 0, copyComplete);
-					return;
-				}
-
-				lastthumbfile = curthumbfile;
-				copyComplete ();
-			};
-
-			copyComplete = (err) => {
-				if (err != null) {
-					reject (err);
-					return;
-				}
-
-				this.setPercentComplete (this.minProgressPercent + ((this.maxProgressPercent - this.minProgressPercent) * segmentindex / segmentfiles.length));
-				createNextThumbnail ();
-			};
-		}));
+	// Read metadata from the HLS transcode output and store the resulting object in this.hlsMetadata
+	async readHlsMetadata () {
+		const data = await FsUtil.readFile (Path.join (this.streamDataPath, App.StreamHlsPath, App.StreamHlsIndexFilename));
+		const metadata = HlsIndexParser.parse (data);
+		if (metadata == null) {
+			throw Error ("Failed to parse HLS index file");
+		}
+		this.hlsMetadata = metadata;
 	}
 
-	// Return a promise that reads metadata from the HLS transcode output and stores the resulting object in this.hlsMetadata
-	readHlsMetadata () {
-		return (new Promise ((resolve, reject) => {
-			Fs.readFile (Path.join (this.streamDataPath, App.STREAM_HLS_PATH, App.STREAM_HLS_INDEX_FILENAME), (err, data) => {
-				let metadata;
+	// Determine the total size of all generated stream files and return the result in bytes
+	async computeStreamSize () {
+		let streamsize;
 
-				if (err != null) {
-					reject (Error (err));
-					return;
-				}
-
-				metadata = HlsIndexParser.parse (data.toString ());
-				if (metadata == null) {
-					reject (Error ("Failed to parse HLS index file"));
-					return;
-				}
-
-				this.hlsMetadata = metadata;
-				resolve ();
-			});
-		}));
+		streamsize = 0;
+		const files = await FsUtil.findAllFiles (this.streamDataPath);
+		for (const file of files) {
+			const stats = await FsUtil.statFile (file);
+			streamsize += stats.size;
+		}
+		return (streamsize);
 	}
 
-	// Return a promise that determines the total size of all generated stream files and resolves with the result in bytes
-	computeStreamSize () {
-		return (new Promise ((resolve, reject) => {
-			let streamsize, files, fileindex, statNextFile, statFileComplete;
-
-			FsUtil.findAllFiles (this.streamDataPath).then ((directoryFiles) => {
-				streamsize = 0;
-				files = directoryFiles;
-				fileindex = -1;
-				statNextFile ();
-			}).catch ((err) => {
-				reject (err);
-			});
-
-			statNextFile = () => {
-				++fileindex;
-				if (fileindex >= files.length) {
-					resolve (streamsize);
-					return;
-				}
-				FsUtil.statFile (files[fileindex], statFileComplete);
-			};
-
-			statFileComplete = (err, stats) => {
-				if (err != null) {
-					reject (Error (err));
-					return;
-				}
-				streamsize += stats.size;
-				statNextFile ();
-			};
-		}));
-	}
-
-	// Subclass method. Implementations should execute task actions and call end when complete.
+	// Subclass method. Implementations should execute actions appropriate when the task has ended.
 	doEnd () {
 		if (this.isSuccess && (! this.isCancelled)) {
 			return;
 		}
+
 		FsUtil.removeDirectory (this.streamDataPath, (err) => {
 		});
 	}
 
 	// Add items to an ffmpeg args array, as appropriate for the specified codec and the configured video profile
-	addVideoProfileArguments (codec, args) {
-		args.push ("-vcodec", codec);
-		if (codec == "libx264") {
-			switch (this.configureMap.profile) {
-				case SystemInterface.Constant.CompressedStreamProfile: {
-					args.push ("-preset", "veryslow");
-					break;
-				}
-				case SystemInterface.Constant.LowQualityStreamProfile: {
-					args.push ("-preset", "slower");
-					break;
-				}
-				case SystemInterface.Constant.LowestQualityStreamProfile: {
-					args.push ("-preset", "slower");
-					break;
-				}
-				default: {
-					args.push ("-preset", "medium");
-					break;
-				}
-			}
+	addVideoProfileArguments (codecName, args) {
+		args.push ("-vcodec", codecName);
 
-			args.push ("-profile:v", "high");
-			args.push ("-level", "4.2");
-			args.push ("-pix_fmt", "yuv420p");
+		const profile = ProfileMap[this.configureMap.profile];
+		if (Array.isArray (profile.videoCodecOptions[codecName])) {
+			for (const arg of profile.videoCodecOptions[codecName]) {
+				args.push (arg);
+			}
+		}
+
+		const codec = CodecMap[codecName];
+		if ((codec !== undefined) && Array.isArray (codec.options)) {
+			for (const arg of codec.options) {
+				args.push (arg);
+			}
 		}
 
 		args.push ("-b:v", this.destMetadata.videoBitrate);
@@ -588,5 +485,4 @@ class CreateMediaStream extends TaskBase {
 		args.push ("-r", this.destMetadata.frameRate);
 	}
 }
-
 module.exports = CreateMediaStream;

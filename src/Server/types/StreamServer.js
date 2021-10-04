@@ -1,5 +1,5 @@
 /*
-* Copyright 2018-2019 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
+* Copyright 2018-2021 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are met:
@@ -30,37 +30,31 @@
 "use strict";
 
 const App = global.App || { };
-const Util = require ("util");
 const Fs = require ("fs");
 const Path = require ("path");
-const Async = require ("async");
-const Url = require ("url");
-const QueryString = require ("querystring");
-const Result = require (App.SOURCE_DIRECTORY + "/Result");
-const Log = require (App.SOURCE_DIRECTORY + "/Log");
-const FsUtil = require (App.SOURCE_DIRECTORY + "/FsUtil");
-const SystemInterface = require (App.SOURCE_DIRECTORY + "/SystemInterface");
-const RepeatTask = require (App.SOURCE_DIRECTORY + "/RepeatTask");
-const Task = require (App.SOURCE_DIRECTORY + "/Task/Task");
-const ServerBase = require (App.SOURCE_DIRECTORY + "/Server/ServerBase");
+const Log = require (Path.join (App.SOURCE_DIRECTORY, "Log"));
+const FsUtil = require (Path.join (App.SOURCE_DIRECTORY, "FsUtil"));
+const StringUtil = require (Path.join (App.SOURCE_DIRECTORY, "StringUtil"));
+const SystemInterface = require (Path.join (App.SOURCE_DIRECTORY, "SystemInterface"));
+const RepeatTask = require (Path.join (App.SOURCE_DIRECTORY, "RepeatTask"));
+const Task = require (Path.join (App.SOURCE_DIRECTORY, "Task", "Task"));
+const ServerBase = require (Path.join (App.SOURCE_DIRECTORY, "Server", "ServerBase"));
 
-const STREAM_WEBROOT_PATH = "/str";
-const THUMBNAIL_PATH = "/str/a.png";
-const HLS_STREAM_PATH = "/str/b.m3u8";
-const HLS_SEGMENT_PATH = "/str/c.ts";
-const DASH_MPD_PATH = "/str/e.mpd";
-const DASH_SEGMENT_PATH = "/str/f.m4s";
-
-const CATALOG_WEBROOT_PATH = "/media";
-const CATALOG_DATA_PATH = "/media-data";
-const PLAYER_WEBROOT_PATH = "/play";
-
-const GET_DISK_SPACE_PERIOD = 7 * 60 * 1000; // milliseconds
+const StreamWebrootPath = "/str";
+const ThumbnailPath = "/str/a.png";
+const HlsStreamPath = "/str/b.m3u8";
+const HlsSegmentPath = "/str/c.ts";
+const DashMpdPath = "/str/e.mpd";
+const DashSegmentPath = "/str/f.m4s";
+const CatalogWebrootPath = "/media";
+const CatalogDataPath = "/media-data";
+const PlayerWebrootPath = "/play";
+const GetDiskSpacePeriod = 7 * 60 * 1000; // milliseconds
 
 class StreamServer extends ServerBase {
 	constructor () {
 		super ();
-		this.name = "StreamServer";
+		this.setName ("StreamServer");
 		this.description = "Transcode media files into stream data for consumption by clients requesting playback";
 
 		this.configureParams = [
@@ -77,134 +71,60 @@ class StreamServer extends ServerBase {
 		this.freeStorage = 0; // bytes
 		this.usedStorage = 0; // bytes
 		this.getDiskSpaceTask = new RepeatTask ();
-
-		// A map of stream ID values to StreamItem commands
-		this.streamMap = { };
+		this.streamCount = 0;
 	}
 
-	// Start the server's operation and invoke the provided callback when complete, with an "err" parameter (non-null if an error occurred)
-	doStart (startCallback) {
-		FsUtil.createDirectory (this.configureMap.dataPath).then (() => {
-			return (Task.executeTask ("GetDiskSpace", { targetPath: this.configureMap.dataPath }));
-		}).then ((resultObject) => {
-			this.totalStorage = resultObject.total;
-			this.usedStorage = resultObject.used;
-			this.freeStorage = resultObject.free;
-		}).then (() => {
-			App.systemAgent.addInvokeRequestHandler ("/", SystemInterface.Constant.Stream, (cmdInv) => {
-				switch (cmdInv.command) {
-					case SystemInterface.CommandId.GetStatus: {
-						return (this.getStatus ());
-					}
-					case SystemInterface.CommandId.ConfigureMediaStream: {
-						return (this.configureMediaStream (cmdInv));
-					}
-					case SystemInterface.CommandId.RemoveStream: {
-						return (this.removeStream (cmdInv));
-					}
-				}
+	// Execute subclass-specific start operations
+	async doStart () {
+		await FsUtil.createDirectory (this.configureMap.dataPath);
+		const df = await Task.executeTask ("GetDiskSpace", { targetPath: this.configureMap.dataPath });
+		this.totalStorage = df.total;
+		this.usedStorage = df.used;
+		this.freeStorage = df.free;
 
-				return (null);
+		this.addInvokeRequestHandler (SystemInterface.Constant.DefaultInvokePath, "ConfigureMediaStream");
+		this.addInvokeRequestHandler (SystemInterface.Constant.DefaultInvokePath, "RemoveStream");
+		this.addLinkCommandHandler ("FindStreamItems");
+		this.addLinkCommandHandler ("FindMediaStreams");
+		this.addSecondaryInvokeRequestHandler (ThumbnailPath, "GetThumbnailImage");
+		this.addSecondaryInvokeRequestHandler (HlsStreamPath, "GetHlsManifest");
+		this.addSecondaryInvokeRequestHandler (HlsSegmentPath, "GetHlsSegment");
+		this.addSecondaryInvokeRequestHandler (DashMpdPath, "GetDashMpd");
+		App.systemAgent.addSecondaryRequestHandler (DashSegmentPath, (request, response) => {
+			this.getDashSegment (request, response).catch ((err) => {
+				Log.err (`${this.name} GetDashSegment failed; err=${err}`);
+				App.systemAgent.writeResponse (request, response, 500);
 			});
+		});
 
-			App.systemAgent.addLinkCommandHandler (SystemInterface.Constant.Stream, (client, cmdInv) => {
-				switch (cmdInv.command) {
-					case SystemInterface.CommandId.FindItems: {
-						this.findItems (client, cmdInv);
-						break;
-					}
-					case SystemInterface.CommandId.FindMediaStreams: {
-						this.findMediaStreams (client, cmdInv);
-						break;
-					}
-				}
+		App.systemAgent.addSecondaryWebroot (StreamWebrootPath, StreamWebrootPath);
+		App.systemAgent.addSecondaryWebroot (PlayerWebrootPath, PlayerWebrootPath);
+		App.systemAgent.addSecondaryWebroot (CatalogWebrootPath, CatalogWebrootPath);
+		this.addSecondaryInvokeRequestHandler (CatalogDataPath, "GetStreamItem");
+		App.systemAgent.addSecondaryInvokeRequestHandler (CatalogDataPath, "FindStreamItems", (cmdInv, request, response) => {
+			this.handleFindStreamItemsRequest (cmdInv, request, response).catch ((err) => {
+				Log.err (`${this.name} FindStreamItems command failed; err=${err}`);
+				App.systemAgent.writeResponse (request, response, 500);
 			});
+		});
+		App.systemAgent.addSecondaryInvokeRequestHandler (CatalogDataPath, "GetStatus", (cmdInv, request, response) => {
+			App.systemAgent.writeResponse (request, response, 200, JSON.stringify (this.getStatus ()));
+		});
 
-			App.systemAgent.addSecondaryRequestHandler (THUMBNAIL_PATH, (cmdInv, request, response) => {
-				switch (cmdInv.command) {
-					case SystemInterface.CommandId.GetThumbnailImage: {
-						this.getThumbnailImage (cmdInv, request, response);
-						break;
-					}
-					default: {
-						App.systemAgent.endRequest (request, response, 400, "Bad request");
-						break;
-					}
-				}
+		App.systemAgent.recordStore.onReady (() => {
+			this.createIndexes ().then (() => {
+				return (this.verifyStreamItems ());
+			}).then (() => {
+				return (this.readRecords ());
+			}).then (() => {
+				this.isReady = true;
+			}).catch ((err) => {
+				Log.err (`Failed to read stream records; err=${err}`);
 			});
+		});
 
-			App.systemAgent.addSecondaryRequestHandler (HLS_STREAM_PATH, (cmdInv, request, response) => {
-				switch (cmdInv.command) {
-					case SystemInterface.CommandId.GetHlsManifest: {
-						this.handleGetHlsManifestRequest (cmdInv, request, response);
-						break;
-					}
-					default: {
-						App.systemAgent.endRequest (request, response, 400, "Bad request");
-						break;
-					}
-				}
-			});
-
-			App.systemAgent.addSecondaryRequestHandler (HLS_SEGMENT_PATH, (cmdInv, request, response) => {
-				switch (cmdInv.command) {
-					case SystemInterface.CommandId.GetHlsSegment: {
-						this.handleGetHlsSegmentRequest (cmdInv, request, response);
-						break;
-					}
-					default: {
-						App.systemAgent.endRequest (request, response, 400, "Bad request");
-						break;
-					}
-				}
-			});
-
-			App.systemAgent.addSecondaryRequestHandler (DASH_MPD_PATH, (cmdInv, request, response) => {
-				switch (cmdInv.command) {
-					case SystemInterface.CommandId.GetDashMpd: {
-						this.handleGetDashMpdRequest (cmdInv, request, response);
-						break;
-					}
-					default: {
-						App.systemAgent.endRequest (request, response, 400, "Bad request");
-						break;
-					}
-				}
-			});
-
-			App.systemAgent.addSecondaryRequestHandler (DASH_SEGMENT_PATH, (cmdInv, request, response) => {
-				this.handleGetDashSegmentRequest (request, response);
-			});
-
-			App.systemAgent.addSecondaryWebroot (STREAM_WEBROOT_PATH, STREAM_WEBROOT_PATH);
-			App.systemAgent.addSecondaryWebroot (PLAYER_WEBROOT_PATH, PLAYER_WEBROOT_PATH);
-			App.systemAgent.addSecondaryWebroot (CATALOG_WEBROOT_PATH, CATALOG_WEBROOT_PATH);
-			App.systemAgent.addSecondaryRequestHandler (CATALOG_DATA_PATH, (cmdInv, request, response) => {
-				switch (cmdInv.command) {
-					case SystemInterface.CommandId.FindItems: {
-						this.handleFindItemsRequest (cmdInv, request, response);
-						break;
-					}
-					case SystemInterface.CommandId.GetStreamItem: {
-						this.handleGetStreamItemRequest (cmdInv, request, response);
-						break;
-					}
-					case SystemInterface.CommandId.GetStatus: {
-						App.systemAgent.endRequest (request, response, 200, JSON.stringify (this.getStatus ()));
-						break;
-					}
-					default: {
-						App.systemAgent.endRequest (request, response, 400, "Bad request");
-						break;
-					}
-				}
-			});
-
-			App.systemAgent.runDataStore (() => {
-				this.readRecords ();
-			});
-
-			this.getDiskSpaceTask.setRepeating ((callback) => {
+		this.getDiskSpaceTask.setRepeating ((callback) => {
+			App.systemAgent.taskGroup.onIdle (() => {
 				Task.executeTask ("GetDiskSpace", { targetPath: this.configureMap.dataPath }).then ((resultObject) => {
 					this.totalStorage = resultObject.total;
 					this.usedStorage = resultObject.used;
@@ -213,579 +133,342 @@ class StreamServer extends ServerBase {
 				}).catch ((err) => {
 					callback ();
 				});
-			}, GET_DISK_SPACE_PERIOD);
+			});
+		}, GetDiskSpacePeriod);
 
-			App.systemAgent.getApplicationNews ();
-			startCallback ();
-		}).catch ((err) => {
-			startCallback (err);
-		});
+		App.systemAgent.getApplicationNews ();
 	}
 
-	// Execute subclass-specific stop operations and invoke the provided callback when complete
-	doStop (stopCallback) {
+	// Execute subclass-specific stop operations
+	async doStop () {
 		this.getDiskSpaceTask.stop ();
-		App.systemAgent.stopDataStore ();
-		process.nextTick (stopCallback);
 	}
 
 	// Return a command invocation containing the server's status
 	doGetStatus () {
-		return (this.createCommand ("StreamServerStatus", SystemInterface.Constant.Stream, {
+		return (this.createCommand ("StreamServerStatus", {
 			isReady: this.isReady,
-			streamCount: Object.keys (this.streamMap).length,
+			streamCount: this.streamCount,
 			freeStorage: this.freeStorage,
 			totalStorage: this.totalStorage,
-			hlsStreamPath: HLS_STREAM_PATH,
-			thumbnailPath: THUMBNAIL_PATH,
-			htmlPlayerPath: PLAYER_WEBROOT_PATH,
-			htmlCatalogPath: CATALOG_WEBROOT_PATH
+			hlsStreamPath: HlsStreamPath,
+			thumbnailPath: ThumbnailPath,
+			htmlPlayerPath: PlayerWebrootPath,
+			htmlCatalogPath: CatalogWebrootPath
 		}));
 	}
 
-	// Execute operations to read records from the data store and replace the contents of streamMap
-	readRecords () {
-		let ds;
+	// Create RecordStore indexes for use in manipulating records
+	async createIndexes () {
+		const indexes = [
+			{ command: 1 },
+			{ "params.id": 1 },
+			{ "params.name": 1 },
+			{ "params.sourceId": 1 }
+		];
+		const obj = { };
+		obj[`prefix.${SystemInterface.Constant.AgentIdPrefixField}`] = 1;
+		indexes.push (obj);
 
-		App.systemAgent.openDataStore ().then ((dataStore) => {
-			ds = dataStore;
-			return (this.createIndexes (ds));
-		}).then (() => {
-			let crit;
+		for (const index of indexes) {
+			await App.systemAgent.recordStore.createIndex (index);
+		}
+	}
 
-			crit = {
-				command: SystemInterface.CommandId.StreamItem
-			};
-			return (ds.findAllRecords (crit));
-		}).then ((records) => {
-			let recordmap;
+	// Read records from the store and update status metadata
+	async readRecords () {
+		const count = await App.systemAgent.recordStore.countRecords ({
+			command: SystemInterface.CommandId.StreamItem
+		});
+		this.streamCount = count;
+	}
 
-			recordmap = { };
-			for (let record of records) {
-				SystemInterface.populateDefaultFields (record.params, SystemInterface.Type[record.commandName]);
-				recordmap[record.params.id] = record;
-			}
-
-			this.streamMap = recordmap;
-			this.isReady = true;
-			this.scanDataDirectory ();
-		}).catch ((err) => {
-			Log.err (`${this.toString ()} failed to read data store records; err=${err}`);
+	// Verify the presence of files required for each stored stream item
+	async verifyStreamItems () {
+		await App.systemAgent.recordStore.findRecords ((record, callback) => {
+			this.pruneStreamItem (record).catch ((err) => {
+				Log.debug (`${this.name} failed to verify stream item; err=${err}`);
+			}).then (() => {
+				callback ();
+			});
+		}, {
+			command: SystemInterface.CommandId.StreamItem
 		});
 	}
 
-	// Return a promise that creates DataStore indexes for use in manipulating records
-	createIndexes (ds) {
-		return (new Promise ((resolve, reject) => {
-			let indexes, obj, doCreate, endSeries;
-			indexes = [
-				{ command: 1 },
-				{ command: 1, commandType: 1 }
-			];
-			obj = { };
-			obj["prefix." + SystemInterface.Constant.AgentIdPrefixField] = 1;
-			indexes.push (obj);
+	async pruneStreamItem (streamItem) {
+		let success;
 
-			obj = { };
-			obj["params.id"] = 1;
-			indexes.push (obj);
-
-			obj = { };
-			obj["params.name"] = 1;
-			indexes.push (obj);
-
-			obj = { };
-			obj["params.sourceId"] = 1;
-			indexes.push (obj);
-
-			setTimeout (() => {
-				Async.eachSeries (indexes, doCreate, endSeries);
-			}, 0);
-
-			doCreate = (index, callback) => {
-				ds.createIndex (index, { }, callback);
-			};
-
-			endSeries = (err) => {
-				if (err != null) {
-					reject (Error (err));
-					return;
-				}
-				resolve ();
-			};
-		}));
-	}
-
-	// Execute operations to verify the presence of files required for each item in the stream map
-	scanDataDirectory () {
-		let items, itemindex, removelist, scanNextItem;
-		setTimeout (() => {
-			removelist = [ ];
-			items = Object.values (this.streamMap);
-			itemindex = -1;
-			scanNextItem ();
-		}, 0);
-		scanNextItem = () => {
-			let item, datapath, filenames, statFilesComplete;
-
-			++itemindex;
-			if (itemindex >= items.length) {
-				this.pruneStreamItems (removelist);
-				return;
-			}
-
-			item = items[itemindex];
-			datapath = Path.join (this.configureMap.dataPath, item.params.id);
-			filenames = [ ];
-			filenames.push (Path.join (datapath, App.STREAM_HLS_PATH, App.STREAM_HLS_INDEX_FILENAME));
-			for (let i = 0; i < item.params.segmentFilenames.length; ++i) {
-				filenames.push (Path.join (datapath, App.STREAM_HLS_PATH, item.params.segmentFilenames[i]));
-				filenames.push (Path.join (datapath, App.STREAM_THUMBNAIL_PATH, item.params.segmentFilenames[i] + ".jpg"));
-			}
-
-			setTimeout (() => {
-				FsUtil.statFiles (filenames, (filename, stats) => {
-					return (stats.isFile () && (stats.size > 0));
-				}, statFilesComplete);
-			}, 0);
-			statFilesComplete = (err) => {
-				if (err != null) {
-					removelist.push (item);
-				}
-				scanNextItem ();
-			};
-		};
-	}
-
-	// Remove a set of StreamItem records from the stream map and delete them from the data store
-	pruneStreamItems (removeList) {
-		let ds, doRemove, endSeries;
-
-		ds = App.systemAgent.dataStore;
-		if (ds == null) {
-			Log.err (`${this.toString ()} failed to update stream items; err="DataStore not available"`);
-			return;
+		const datapath = Path.join (this.configureMap.dataPath, streamItem.params.id);
+		const filenames = [ ];
+		filenames.push (Path.join (datapath, App.StreamHlsPath, App.StreamHlsIndexFilename));
+		for (let i = 0; i < streamItem.params.segmentFilenames.length; ++i) {
+			filenames.push (Path.join (datapath, App.StreamHlsPath, streamItem.params.segmentFilenames[i]));
+			filenames.push (Path.join (datapath, App.StreamThumbnailPath, `${streamItem.params.segmentFilenames[i]}.jpg`));
 		}
 
-		ds.open ((err) => {
-			if (err != null) {
-				Log.err (`${this.toString ()} failed to update stream items; err=${err}`);
-				return;
-			}
-			Async.eachSeries (removeList, doRemove, endSeries);
-		});
+		// TODO: Verify DASH files as well as HLS files
 
-		doRemove = (streamItem, callback) => {
-			let crit, removeRecordsComplete, removeDirectoryComplete;
-			delete (this.streamMap[streamItem.params.id]);
-			crit = {
-				"params.id": streamItem.params.id
-			};
-			setTimeout (() => {
-				ds.removeRecords (crit, removeRecordsComplete);
-			}, 0);
-			removeRecordsComplete = (err) => {
-				if (err != null) {
-					callback (err);
-					return;
-				}
+		success = true;
+		try {
+			await FsUtil.statFiles (filenames, (filename, stats) => {
+				return (stats.isFile () && (stats.size > 0));
+			});
+		}
+		catch (err) {
+			success = false;
+		}
 
-				FsUtil.removeDirectory (Path.join (this.configureMap.dataPath, streamItem.params.id), removeDirectoryComplete);
-			};
-			removeDirectoryComplete = (err) => {
-				callback (err);
-			};
-		};
-
-		endSeries = (err) => {
-			if (err != null) {
-				Log.warn (`${this.toString ()} failed to update stream items; err=${err}`);
-			}
-		};
+		if (! success) {
+			await this.removeStreamItem (streamItem);
+		}
 	}
 
-	// Execute a FindItems command and write result commands to the provided client
-	findItems (client, cmdInv) {
-		let ds, crit, sort, findresult, findCallback;
+	async removeStreamItem (streamItem) {
+		await App.systemAgent.recordStore.removeCommandRecord (SystemInterface.CommandId.StreamItem, streamItem.params.id);
+		await FsUtil.removeDirectory (Path.join (this.configureMap.dataPath, streamItem.params.id));
+		await this.readRecords ();
+	}
 
-		App.systemAgent.openDataStore ().then ((dataStore) => {
-			ds = dataStore;
-			crit = {
-				command: SystemInterface.CommandId.StreamItem
-			};
-			if ((cmdInv.params.searchKey != "") && (cmdInv.params.searchKey != "*")) {
-				crit["params.name"] = {
-					"$regex": ds.getSearchKeyRegex (cmdInv.params.searchKey),
-					"$options": "i"
-				};
-			}
-			sort = {
-				"params.name": 1
-			};
-			findresult = {
-				searchKey: cmdInv.params.searchKey,
-				resultOffset: cmdInv.params.resultOffset
-			};
-			return (ds.countRecords (crit));
-		}).then ((recordCount) => {
-			let max, skip;
+	// Change StreamItem params fields in record, as appropriate for items to be returned as find results
+	transformStreamItemResult (record) {
+		record.params.segmentFilenames = [ ];
+		record.params.segmentLengths = [ ];
+	}
 
-			max = null;
-			skip = null;
-			if (cmdInv.params.maxResults > 0) {
-				max = cmdInv.params.maxResults;
-			}
-			if (cmdInv.params.resultOffset > 0) {
-				skip = cmdInv.params.resultOffset;
-			}
-
-			findresult.setSize = recordCount;
-			if (recordCount <= 0) {
-				client.emit (SystemInterface.Constant.WebSocketEvent, this.createCommand ("FindMediaResult", SystemInterface.Constant.Stream, findresult));
-				return;
-			}
-
-			ds.findRecords (findCallback, crit, sort, max, skip);
-		}).catch ((err) => {
-			Log.err (`${this.toString ()} FindItems command failed to execute; err=${err}`);
-		});
-
-		findCallback = (err, record) => {
-			if (err != null) {
-				Log.err (`${this.toString ()} FindItems command failed to execute; err=${err}`);
-				return;
-			}
-
-			if (findresult != null) {
-				findresult = this.createCommand ("FindStreamsResult", SystemInterface.Constant.Stream, findresult);
-				if (findresult != null) {
-					client.emit (SystemInterface.Constant.WebSocketEvent, findresult);
-				}
-				findresult = null;
-			}
-
-			if (record != null) {
-				SystemInterface.populateDefaultFields (record.params, SystemInterface.Type[record.commandName]);
-				client.emit (SystemInterface.Constant.WebSocketEvent, record);
-			}
+	// Execute a FindStreamItems command and write result commands to the provided client
+	async findStreamItems (cmdInv, client) {
+		const crit = {
+			command: SystemInterface.CommandId.StreamItem
 		};
+		if ((cmdInv.params.searchKey != "") && (cmdInv.params.searchKey != "*")) {
+			crit["params.name"] = {
+				"$regex": App.systemAgent.recordStore.getSearchKeyRegex (cmdInv.params.searchKey),
+				"$options": "i"
+			};
+		}
+		const sort = {
+			"params.name": 1
+		};
+		const max = (cmdInv.params.maxResults > 0) ? cmdInv.params.maxResults : null;
+		const skip = (cmdInv.params.resultOffset > 0) ? cmdInv.params.resultOffset : null;
+
+		const findresult = {
+			searchKey: cmdInv.params.searchKey,
+			resultOffset: cmdInv.params.resultOffset
+		};
+		findresult.setSize = await App.systemAgent.recordStore.countRecords (crit);
+		client.emit (SystemInterface.Constant.WebSocketEvent, this.createCommand ("FindStreamItemsResult", findresult));
+		if (findresult.setSize <= 0) {
+			await App.systemAgent.recordStore.findRecords ((record, callback) => {
+				SystemInterface.populateDefaultFields (record.params, SystemInterface.Type[record.commandName]);
+				this.transformStreamItemResult (record);
+				client.emit (SystemInterface.Constant.WebSocketEvent, record);
+				process.nextTick (callback);
+			}, crit, sort, max, skip);
+		}
 	}
 
 	// Execute a FindMediaStreams command and write result commands to the provided client
-	findMediaStreams (client, cmdInv) {
-		let ds;
+	async findMediaStreams (cmdInv, client) {
+		for (const id of cmdInv.params.sourceIds) {
+			const streams = [ ];
+			const crit = {
+				command: SystemInterface.CommandId.StreamItem,
+				"params.sourceId": id
+			};
+			const sort = {
+				"params.id": 1
+			};
+			await App.systemAgent.recordStore.findRecords ((record, callback) => {
+				SystemInterface.populateDefaultFields (record.params, SystemInterface.Type[record.commandName]);
+				this.transformStreamItemResult (record);
+				streams.push (record);
+				process.nextTick (callback);
+			}, crit, sort);
+			client.emit (SystemInterface.Constant.WebSocketEvent, this.createCommand ("FindMediaStreamsResult", {
+				mediaId: id,
+				streams: streams
+			}));
+		}
+	}
 
-		if (cmdInv.params.sourceIds.length <= 0) {
+	// Execute a ConfigureMediaStream command
+	async configureMediaStream (cmdInv, request, response) {
+		let mediapath;
+
+		if (await App.systemAgent.recordStore.recordExists ({
+			command: SystemInterface.CommandId.StreamItem,
+			"params.sourceId": cmdInv.params.mediaId,
+			"params.profile": cmdInv.params.profile
+		})) {
+			App.systemAgent.writeCommandResponse (request, response, this.createCommand ("CommandResult", {
+				success: true
+			}));
 			return;
 		}
 
-		App.systemAgent.openDataStore ().then ((dataStore) => {
-			ds = dataStore;
-			return (new Promise ((resolve, reject) => {
-				let crit, sort, doFind, endSeries, findCallback, streams;
-
-				streams = [ ];
-				doFind = (sourceId, callback) => {
-					crit = {
-						command: SystemInterface.CommandId.StreamItem,
-						"params.sourceId": sourceId
-					};
-					sort = {
-						"params.id": 1
-					};
-
-					findCallback = (err, record) => {
-						if (err != null) {
-							callback (err);
-							return;
-						}
-						if (record == null) {
-							client.emit (SystemInterface.Constant.WebSocketEvent, this.createCommand ("FindMediaStreamsResult", SystemInterface.Constant.Stream, {
-								mediaId: sourceId,
-								streams: streams
-							}));
-
-							callback ();
-							return;
-						}
-
-						SystemInterface.populateDefaultFields (record.params, SystemInterface.Type[record.commandName]);
-						streams.push (record);
-					};
-
-					ds.findRecords (findCallback, crit, sort);
-				};
-
-				endSeries = (err) => {
-					if (err != null) {
-						reject (err);
-						return;
-					}
-
-					resolve ();
-				};
-
-				Async.eachSeries (cmdInv.params.sourceIds, doFind, endSeries);
-			}));
-		}).catch ((err) => {
-			Log.err (`${this.toString ()} FindMediaStreams command failed to execute; err=${err}`);
-		});
-	}
-
-	// Execute a ConfigureMediaStream command and return a command invocation result
-	configureMediaStream (cmdInv) {
-		let mediapath, mediaserver, mediaitem, streamid, removelist, match, params, task;
 		mediapath = "";
 		if (cmdInv.params.mediaServerAgentId == App.systemAgent.agentId) {
-			mediaserver = App.systemAgent.getServer ("MediaServer");
-			if (mediaserver != null) {
-				mediaitem = mediaserver.mediaMap[cmdInv.params.mediaId];
-				if (mediaitem != null) {
-					mediapath = mediaitem.params.mediaPath;
-				}
+			const mediaitem = await App.systemAgent.recordStore.findCommandRecord (SystemInterface.CommandId.MediaItem, cmdInv.params.mediaId);
+			if (mediaitem != null) {
+				mediapath = mediaitem.params.mediaPath;
 			}
 		}
 		if (mediapath == "") {
 			mediapath = cmdInv.params.mediaUrl;
 		}
 		if (mediapath == "") {
-			return (this.createCommand ("CommandResult", SystemInterface.Constant.Stream, {
+			App.systemAgent.writeCommandResponse (request, response, this.createCommand ("CommandResult", {
 				success: false,
 				error: "Media item not found"
 			}));
+			return;
 		}
 
-		removelist = [ ];
-		match = false;
-		for (let item of Object.values (this.streamMap)) {
-			if (item.params.sourceId == cmdInv.params.mediaId) {
-				if (item.params.profile == cmdInv.params.profile) {
-					match = true;
-					break;
-				}
-
-				removelist.push (item);
-			}
-		}
-		if (match) {
-			return (this.createCommand ("CommandResult", SystemInterface.Constant.Stream, {
-				success: true
-			}));
-		}
-		this.pruneStreamItems (removelist);
-
-		streamid = App.systemAgent.getUuid (SystemInterface.CommandId.StreamItem);
-		params = {
-			streamId: streamid,
-			streamName: cmdInv.params.streamName,
-			mediaId: cmdInv.params.mediaId,
-			mediaPath: mediapath,
-			dataPath: this.configureMap.dataPath,
-			mediaWidth: cmdInv.params.mediaWidth,
-			mediaHeight: cmdInv.params.mediaHeight,
-			profile: cmdInv.params.profile
-		};
-		task = Task.createTask ("CreateMediaStream", params);
-		if (task == null) {
-			return (this.createCommand ("CommandResult", SystemInterface.Constant.Stream, {
-				success: false,
-				error: "Internal server error"
-			}));
-		}
-
-		App.systemAgent.runTask (task, (task) => {
-			let record;
-			if (task.isSuccess) {
-				App.systemAgent.openDataStore ().then ((ds) => {
-					record = this.createCommand ("StreamItem", SystemInterface.Constant.Stream, task.resultObject);
-					if (record == null) {
-						return (Promise.reject (Error ("Invalid record data")));
-					}
-
-					return (ds.storeRecord (record));
-				}).then (() => {
-					this.streamMap[record.params.id] = record;
-				}).catch ((err) => {
-					Log.err (`${this.toString ()} failed to store stream item record; err=${err}`);
-				});
-			}
-		});
-
-		return (this.createCommand ("CommandResult", SystemInterface.Constant.Stream, {
-			success: true,
-			taskId: task.id
-		}));
-	}
-
-	// Execute a RemoveStream command and return a command invocation result
-	removeStream (cmdInv) {
-		let item;
-
-		item = this.streamMap[cmdInv.params.id];
-		if (item == null) {
-			return (server.createCommand ("CommandResult", SystemInterface.Constant.Stream, {
-				success: false
-			}));
-		}
-
-		this.pruneStreamItems ([ item ]);
-		return (this.createCommand ("CommandResult", SystemInterface.Constant.Stream, {
+		App.systemAgent.writeCommandResponse (request, response, this.createCommand ("CommandResult", {
 			success: true
 		}));
+		const oldstreams = await App.systemAgent.recordStore.findAllRecords ({
+			command: SystemInterface.CommandId.StreamItem,
+			"params.sourceId": cmdInv.params.mediaId
+		});
+		for (const stream of oldstreams) {
+			try {
+				await this.removeStreamItem (stream);
+			}
+			catch (err) {
+				Log.debug (`${this.name} failed to remove stream item; err=${err}`);
+			}
+		}
+
+		try {
+			await App.systemAgent.runTask ("CreateMediaStream", {
+				streamId: App.systemAgent.getUuid (SystemInterface.CommandId.StreamItem),
+				streamName: cmdInv.params.streamName,
+				mediaId: cmdInv.params.mediaId,
+				mediaPath: mediapath,
+				dataPath: this.configureMap.dataPath,
+				mediaWidth: cmdInv.params.mediaWidth,
+				mediaHeight: cmdInv.params.mediaHeight,
+				profile: cmdInv.params.profile
+			});
+			await this.readRecords ();
+		}
+		catch (err) {
+			Log.err (`${this.name} failed to create media stream; err=${err}`);
+		}
 	}
 
-	// Handle a request with a FindItems command
-	handleFindItemsRequest (cmdInv, request, response) {
-		let ds, crit, sort, findresult;
+	// Execute a RemoveStream command
+	async removeStream (cmdInv, request, response) {
+		App.systemAgent.writeCommandResponse (request, response, this.createCommand ("CommandResult", {
+			success: true
+		}));
+		const item = await App.systemAgent.recordStore.findCommandRecord (SystemInterface.CommandId.StreamItem, cmdInv.params.id);
+		if (item != null) {
+			await this.removeStreamItem (item);
+		}
+	}
 
-		App.systemAgent.openDataStore ().then ((dataStore) => {
-			ds = dataStore;
-			crit = {
-				command: SystemInterface.CommandId.StreamItem
+	// Handle a request with a FindStreamItems command
+	async handleFindStreamItemsRequest (cmdInv, request, response) {
+		const crit = {
+			command: SystemInterface.CommandId.StreamItem
+		};
+		if ((cmdInv.params.searchKey != "") && (cmdInv.params.searchKey != "*")) {
+			crit["params.name"] = {
+				"$regex": App.systemAgent.recordStore.getSearchKeyRegex (cmdInv.params.searchKey),
+				"$options": "i"
 			};
-			if ((cmdInv.params.searchKey != "") && (cmdInv.params.searchKey != "*")) {
-				crit["params.name"] = {
-					"$regex": ds.getSearchKeyRegex (cmdInv.params.searchKey),
-					"$options": "i"
-				};
-			}
-			sort = {
-				"params.name": 1
-			};
-			findresult = {
-				searchKey: cmdInv.params.searchKey,
-				resultOffset: cmdInv.params.resultOffset,
-				streams: [ ]
-			};
-			return (ds.countRecords (crit));
-		}).then ((recordCount) => {
-			let max, skip, cmd;
-
-			max = null;
-			skip = null;
-			if (cmdInv.params.maxResults > 0) {
-				max = cmdInv.params.maxResults;
-			}
-			if (cmdInv.params.resultOffset > 0) {
-				skip = cmdInv.params.resultOffset;
-			}
-
-			findresult.setSize = recordCount;
-			if (recordCount <= 0) {
-				cmd = this.createCommand ("FindStreamsResult", SystemInterface.Constant.Stream, findresult);
-				if (cmd == null) {
-					App.systemAgent.endRequest (request, response, 500, "Internal server error");
-				}
-				else {
-					response.setHeader ("Content-Type", "application/json");
-					App.systemAgent.endRequest (request, response, 200, JSON.stringify (cmd));
-				}
-				return;
-			}
-
-			ds.findRecords ((err, record) => {
-				let summary;
-
-				if (err != null) {
-					Log.err (`${this.toString ()} FindItems command failed to execute; err=${err}`);
-					App.systemAgent.endRequest (request, response, 500, "Internal server error");
-					return;
-				}
-
-				if (record == null) {
-					cmd = this.createCommand ("FindStreamsResult", SystemInterface.Constant.Stream, findresult);
-					if (cmd == null) {
-						App.systemAgent.endRequest (request, response, 500, "Internal server error");
-					}
-					else {
-						response.setHeader ("Content-Type", "application/json");
-						App.systemAgent.endRequest (request, response, 200, JSON.stringify (cmd));
-					}
-					return;
-				}
-
+		}
+		const sort = {
+			"params.name": 1
+		};
+		const max = (cmdInv.params.maxResults > 0) ? cmdInv.params.maxResults : null;
+		const skip = (cmdInv.params.resultOffset > 0) ? cmdInv.params.resultOffset : null;
+		const findresult = {
+			searchKey: cmdInv.params.searchKey,
+			resultOffset: cmdInv.params.resultOffset,
+			streams: [ ]
+		};
+		findresult.setSize = await App.systemAgent.recordStore.countRecords (crit);
+		if (findresult.setSize > 0) {
+			await App.systemAgent.recordStore.findRecords ((record, callback) => {
 				SystemInterface.populateDefaultFields (record.params, SystemInterface.Type[record.commandName]);
-				summary = { };
-				for (let i of [ "id", "name", "duration", "width", "height", "size", "bitrate", "frameRate", "profile", "segmentCount" ]) {
+				const summary = { };
+				for (const i of [ "id", "name", "duration", "width", "height", "size", "bitrate", "frameRate", "profile", "segmentCount" ]) {
 					summary[i] = record.params[i];
 				}
 				findresult.streams.push (summary);
+				process.nextTick (callback);
 			}, crit, sort, max, skip);
-		}).catch ((err) => {
-			Log.err (`${this.toString ()} FindItems command failed to execute; err=${err}`);
-			App.systemAgent.endRequest (request, response, 500, "Internal server error");
-		});
+		}
+		App.systemAgent.writeCommandResponse (request, response, this.createCommand ("FindStreamItemsResult", findresult));
 	}
 
-	// Handle a request with a GetStreamItem command
-	handleGetStreamItemRequest (cmdInv, request, response) {
-		let item;
-
-		item = this.streamMap[cmdInv.params.streamId];
+	// Execute a GetStreamItem command
+	async getStreamItem (cmdInv, request, response) {
+		const item = await App.systemAgent.recordStore.findCommandRecord (SystemInterface.CommandId.StreamItem, cmdInv.params.streamId);
 		if (item == null) {
-			App.systemAgent.endRequest (request, response, 404, "Not found");
+			App.systemAgent.writeResponse (request, response, 404);
+			return;
+		}
+		App.systemAgent.writeCommandResponse (request, response, item);
+	}
+
+	// Execute a GetDashMpd command
+	async getDashMpd (cmdInv, request, response) {
+		const item = await App.systemAgent.recordStore.findCommandRecord (SystemInterface.CommandId.StreamItem, cmdInv.params.streamId);
+		if (item == null) {
+			App.systemAgent.writeResponse (request, response, 404);
 			return;
 		}
 
-		response.setHeader ("Content-Type", "application/json");
-		App.systemAgent.endRequest (request, response, 200, JSON.stringify (item));
-	}
-
-	// Handle a request with a GetDashMpd command
-	handleGetDashMpdRequest (cmdInv, request, response) {
-		let item;
-
-		item = this.streamMap[cmdInv.params.streamId];
-		if (item == null) {
-			App.systemAgent.endRequest (request, response, 404, "Not found");
-			return;
-		}
-
-		Fs.readFile (Path.join (this.configureMap.dataPath, item.params.id, App.STREAM_DASH_PATH, App.STREAM_DASH_DESCRIPTION_FILENAME), (err, data) => {
+		Fs.readFile (Path.join (this.configureMap.dataPath, item.params.id, App.StreamDashPath, App.StreamDashDescriptionFilename), (err, data) => {
 			if (err != null) {
-				App.systemAgent.endRequest (request, response, 500, "Internal server error");
+				App.systemAgent.writeResponse (request, response, 500);
 				return;
 			}
 
 			data = data.toString ();
-			data = data.replace (/init-stream\$RepresentationID\$.m4s/g, DASH_SEGMENT_PATH + "?streamId=" + cmdInv.params.streamId + "&amp;representationIndex=$$RepresentationID$$&amp;segmentIndex=0");
-			data = data.replace (/chunk-stream\$RepresentationID\$-\$Number%05d\$.m4s/g, DASH_SEGMENT_PATH + "?streamId=" + cmdInv.params.streamId + "&amp;representationIndex=$$RepresentationID$$&amp;segmentIndex=$$Number%05d$$");
+			data = data.replace (/init-stream\$RepresentationID\$.m4s/g, `${DashSegmentPath}?streamId=${cmdInv.params.streamId}&amp;representationIndex=$$RepresentationID$$&amp;segmentIndex=0`);
+			data = data.replace (/chunk-stream\$RepresentationID\$-\$Number%05d\$.m4s/g, `${DashSegmentPath}?streamId=${cmdInv.params.streamId}&amp;representationIndex=$$RepresentationID$$&amp;segmentIndex=$$Number%05d$$`);
 
 			response.setHeader ("Content-Type", "dash/xml");
-			App.systemAgent.endRequest (request, response, 200, data);
+			App.systemAgent.writeResponse (request, response, 200, data);
 		});
 	}
 
 	// Handle a request for a DASH segment
-	handleGetDashSegmentRequest (request, response) {
-		let url, q, streamid, ri, si, item, filename, path;
+	async getDashSegment (request, response) {
+		let filename;
 
-		url = Url.parse (request.url);
+		const url = StringUtil.parseUrl (request.url);
 		if (url == null) {
-			App.systemAgent.endRequest (request, response, 400, "Bad request");
+			App.systemAgent.writeResponse (request, response, 400);
 			return;
 		}
 
-		q = QueryString.parse (url.query);
-		streamid = (typeof q.streamId == "string") ? q.streamId : null;
-		ri = (typeof q.representationIndex == "string") ? q.representationIndex : null;
-		si = (typeof q.segmentIndex == "string") ? q.segmentIndex : null;
+		const streamid = url.searchParams.get ("streamId");
+		const ri = url.searchParams.get ("representationIndex");
+		const si = url.searchParams.get ("segmentIndex");
 		if ((streamid === null) || (ri === null) || (si === null)) {
-			App.systemAgent.endRequest (request, response, 400, "Bad request");
+			App.systemAgent.writeResponse (request, response, 400);
 			return;
 		}
 		if (streamid.search (/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/) != 0) {
-			App.systemAgent.endRequest (request, response, 400, "Bad request");
+			App.systemAgent.writeResponse (request, response, 400);
 			return;
 		}
 		if ((! ri.match (/^[0-9]+$/)) || (! si.match (/^[0-9]+$/))) {
-			App.systemAgent.endRequest (request, response, 400, "Bad request");
+			App.systemAgent.writeResponse (request, response, 400);
 			return;
 		}
 
-		item = this.streamMap[streamid];
+		const item = await App.systemAgent.recordStore.findCommandRecord (SystemInterface.CommandId.StreamItem, streamid);
 		if (item == null) {
-			App.systemAgent.endRequest (request, response, 404, "Not found");
+			App.systemAgent.writeResponse (request, response, 404);
 			return;
 		}
 		if (si == "0") {
@@ -795,31 +478,30 @@ class StreamServer extends ServerBase {
 			filename = `chunk-stream${ri}-${si}.m4s`;
 		}
 
-		path = Path.join (this.configureMap.dataPath, item.params.id, App.STREAM_DASH_PATH, filename);
+		const path = Path.join (this.configureMap.dataPath, item.params.id, App.StreamDashPath, filename);
 		App.systemAgent.writeFileResponse (request, response, path, "video/mp4");
 	}
 
-	// Handle a request with a GetHlsManifest command
-	handleGetHlsManifestRequest (cmdInv, request, response) {
-		let indexdata, item, i, segmenturl, segmentcmd, firstsegment, pct, delta;
+	// Execute a GetHlsManifest command
+	async getHlsManifest (cmdInv, request, response) {
+		let indexdata, segmentcmd, firstsegment, pct, delta;
 
-		item = this.streamMap[cmdInv.params.streamId];
+		const item = await App.systemAgent.recordStore.findCommandRecord (SystemInterface.CommandId.StreamItem, cmdInv.params.streamId);
 		if (item == null) {
-			App.systemAgent.endRequest (request, response, 404, "Not found");
+			App.systemAgent.writeResponse (request, response, 404);
 			return;
 		}
 
-		segmenturl = HLS_SEGMENT_PATH;
 		indexdata = "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-ALLOW-CACHE:NO\n";
 		if (item.params.hlsTargetDuration > 0) {
-			indexdata += "#EXT-X-TARGETDURATION:" + item.params.hlsTargetDuration + "\n";
+			indexdata += `#EXT-X-TARGETDURATION:${item.params.hlsTargetDuration}\n`;
 		}
 		else {
 			indexdata += "#EXT-X-TARGETDURATION:5\n";
 		}
 
 		firstsegment = 0;
-		for (i = 0; i < item.params.segmentCount; ++i) {
+		for (let i = 0; i < item.params.segmentCount; ++i) {
 			if (item.params.segmentPositions[i] >= cmdInv.params.startPosition) {
 				firstsegment = i;
 				break;
@@ -843,59 +525,50 @@ class StreamServer extends ServerBase {
 			}
 		}
 
-		for (i = firstsegment; i < item.params.segmentCount; ++i) {
-			indexdata += "#EXTINF:" + item.params.segmentLengths[i] + ",\n";
-
-			segmentcmd = this.createCommand ("GetHlsSegment", SystemInterface.Constant.Stream, {
+		for (let i = firstsegment; i < item.params.segmentCount; ++i) {
+			indexdata += `#EXTINF:${item.params.segmentLengths[i]},\n`;
+			segmentcmd = this.createCommand ("GetHlsSegment", {
 				streamId: cmdInv.params.streamId,
 				segmentIndex: i
 			});
 			if (segmentcmd == null) {
 				continue;
 			}
-			indexdata += segmenturl + "?" + SystemInterface.Constant.UrlQueryParameter + "=" + encodeURIComponent (JSON.stringify (segmentcmd)) + "\n";
+			indexdata += `${HlsSegmentPath}?${SystemInterface.Constant.UrlQueryParameter}=${encodeURIComponent (JSON.stringify (segmentcmd))}\n`;
 		}
 		indexdata += "#EXT-X-ENDLIST\n";
 
 		response.setHeader ("Content-Type", "application/x-mpegURL");
-		App.systemAgent.endRequest (request, response, 200, indexdata);
+		App.systemAgent.writeResponse (request, response, 200, indexdata);
 	}
 
-	// Handle a request with a GetHlsSegment command
-	handleGetHlsSegmentRequest (cmdInv, request, response) {
-		let path, item;
-
-		item = this.streamMap[cmdInv.params.streamId];
+	// Execute a GetHlsSegment command
+	async getHlsSegment (cmdInv, request, response) {
+		const item = await App.systemAgent.recordStore.findCommandRecord (SystemInterface.CommandId.StreamItem, cmdInv.params.streamId);
 		if (item == null) {
-			App.systemAgent.endRequest (request, response, 404, "Not found");
+			App.systemAgent.writeResponse (request, response, 404);
 			return;
 		}
-
 		if (cmdInv.params.segmentIndex >= item.params.segmentCount) {
-			App.systemAgent.endRequest (request, response, 404, "Not found");
+			App.systemAgent.writeResponse (request, response, 404);
 			return;
 		}
-
-		path = Path.join (this.configureMap.dataPath, cmdInv.params.streamId, App.STREAM_HLS_PATH, item.params.segmentFilenames[cmdInv.params.segmentIndex]);
+		const path = Path.join (this.configureMap.dataPath, cmdInv.params.streamId, App.StreamHlsPath, item.params.segmentFilenames[cmdInv.params.segmentIndex]);
 		App.systemAgent.writeFileResponse (request, response, path, "video/MP2T");
 	}
 
-	// Handle a request with a GetThumbnailImage command
-	getThumbnailImage (cmdInv, request, response) {
-		let path, item;
-
-		item = this.streamMap[cmdInv.params.id];
+	// Execute a GetThumbnailImage command
+	async getThumbnailImage (cmdInv, request, response) {
+		const item = await App.systemAgent.recordStore.findCommandRecord (SystemInterface.CommandId.StreamItem, cmdInv.params.id);
 		if (item == null) {
-			App.systemAgent.endRequest (request, response, 404, "Not found");
+			App.systemAgent.writeResponse (request, response, 404);
 			return;
 		}
-
 		if (cmdInv.params.thumbnailIndex >= item.params.segmentCount) {
-			App.systemAgent.endRequest (request, response, 404, "Not found");
+			App.systemAgent.writeResponse (request, response, 404);
 			return;
 		}
-
-		path = Path.join (this.configureMap.dataPath, cmdInv.params.id, App.STREAM_THUMBNAIL_PATH, item.params.segmentFilenames[cmdInv.params.thumbnailIndex] + ".jpg");
+		const path = Path.join (this.configureMap.dataPath, cmdInv.params.id, App.StreamThumbnailPath, `${item.params.segmentFilenames[cmdInv.params.thumbnailIndex]}.jpg`);
 		App.systemAgent.writeFileResponse (request, response, path, "image/jpeg");
 	}
 }

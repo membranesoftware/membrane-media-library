@@ -1,5 +1,5 @@
 /*
-* Copyright 2018-2019 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
+* Copyright 2018-2021 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are met:
@@ -27,16 +27,10 @@
 * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 * POSSIBILITY OF SUCH DAMAGE.
 */
-// Class that holds server type data
+// Server subclasses
 
-const App = global.App || { };
-const ServerTypes = require ('./types');
+"use strict";
 
-function Server () {
+const ServerTypes = require ("./types");
 
-}
-
-module.exports = Server;
-
-Server.ServerTypes = ServerTypes;
 exports.ServerTypes = ServerTypes;

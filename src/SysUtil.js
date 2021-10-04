@@ -1,5 +1,5 @@
 /*
-* Copyright 2018-2019 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
+* Copyright 2018-2021 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are met:
@@ -31,19 +31,16 @@
 
 "use strict";
 
-const App = global.App || { };
-
-// Return an item from a map, or undefined if the item wasn't found. If createFn is a function that returns an object, use it to create a new map item if not found.
-exports.getMapItem = function (map, key, createFn) {
+// Return an item from a map, or undefined if the item wasn't found. If createFn is a function that returns an object, use it to create a new map item for any nonexistent key.
+exports.getMapItem = (map, key, createFn) => {
 	let item;
 
 	item = map[key];
 	if (item === undefined) {
-		if (typeof createFn == 'function') {
+		if (typeof createFn == "function") {
 			item = createFn ();
 			map[key] = item;
 		}
 	}
-
 	return (item);
 };

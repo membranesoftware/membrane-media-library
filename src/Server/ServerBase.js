@@ -1,5 +1,5 @@
 /*
-* Copyright 2018-2019 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
+* Copyright 2018-2021 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are met:
@@ -32,37 +32,23 @@
 "use strict";
 
 const App = global.App || { };
-const Result = require (App.SOURCE_DIRECTORY + "/Result");
-const Log = require (App.SOURCE_DIRECTORY + "/Log");
-const SystemInterface = require (App.SOURCE_DIRECTORY + "/SystemInterface");
+const Path = require ("path");
+const Log = require (Path.join (App.SOURCE_DIRECTORY, "Log"));
+const StringUtil = require (Path.join (App.SOURCE_DIRECTORY, "StringUtil"));
+const SystemInterface = require (Path.join (App.SOURCE_DIRECTORY, "SystemInterface"));
 
 class ServerBase {
 	constructor () {
-		// Set this value to specify the server's name, usually expected to match its class name
 		this.name = "ServerBase";
-
-		// Set this value to specify the server's description
+		this.agentConfigurationKey = "";
+		this.agentStatusKey = "";
 		this.description = "";
-
-		// Populate this list with SystemInterface Type field items to specify parameters acceptable for server configuration
 		this.configureParams = [ ];
-
-		// Set values in this map for use as default configuration parameters
 		this.baseConfiguration = { };
-
-		// Fields in this object are set by the configure method, using items from the configureParams list
 		this.configureMap = { };
-
-		// Fields in this object are set by the configure method, storing fields that differ from the base configuration
 		this.deltaConfiguration = { };
-
-		// Set values in this map that should be included in status report strings
 		this.statusMap = { };
-
-		// Set this value to indicate whether the server has been configured with valid parameters
 		this.isConfigured = false;
-
-		// Set this value to indicate whether the server is running
 		this.isRunning = false;
 	}
 
@@ -70,36 +56,31 @@ class ServerBase {
 	toString () {
 		let s;
 
-		s = "<" + this.name;
+		s = `<${this.name}`;
 		if (Object.keys (this.statusMap).length > 0) {
-			s += " " + JSON.stringify (this.statusMap);
+			s += ` ${JSON.stringify (this.statusMap)}`;
 		}
 		s += ">";
 
 		return (s);
 	}
 
-	// Return the AgentConfiguration field name that holds configuration values for servers of this type
-	getAgentConfigurationKey () {
-		return (this.name.substring (0, 1).toLowerCase () + this.name.substring (1) + "Configuration");
-	}
-
-	// Return the AgentStatus field name that holds status values for servers of this type
-	getAgentStatusKey () {
-		return (this.name.substring (0, 1).toLowerCase () + this.name.substring (1) + "Status");
+	// Set the server's name and related fields
+	setName (name) {
+		this.name = name;
+		this.agentConfigurationKey = `${this.name.substring (0, 1).toLowerCase ()}${this.name.substring (1)}Configuration`;
+		this.agentStatusKey = `${this.name.substring (0, 1).toLowerCase ()}${this.name.substring (1)}Status`;
 	}
 
 	// Configure the server using values in the provided params object and set the isConfigured data member to reflect whether the configuration was successful
 	configure (configParams) {
-		let fields;
-
 		if ((typeof configParams != "object") || (configParams == null)) {
 			configParams = { };
 		}
 
-		fields = this.parseConfiguration (configParams);
+		const fields = this.parseConfiguration (configParams);
 		if (SystemInterface.isError (fields)) {
-			Log.err (`${this.toString ()} configuration parse error; err=${fields}`);
+			Log.err (`${this.name} configuration parse error; err=${fields}`);
 			return;
 		}
 
@@ -116,18 +97,15 @@ class ServerBase {
 
 	// Return an object containing configuration fields parsed from the server's base configuration combined with the provided parameters, or an error message if the parse failed
 	parseConfiguration (configParams) {
-		let c;
-
-		c = { };
-		for (let i in this.baseConfiguration) {
+		const c = { };
+		for (const i in this.baseConfiguration) {
 			c[i] = this.baseConfiguration[i];
 		}
 		if ((typeof configParams == "object") && (configParams != null)) {
-			for (let i in configParams) {
+			for (const i in configParams) {
 				c[i] = configParams[i];
 			}
 		}
-
 		return (SystemInterface.parseFields (this.configureParams, c));
 	}
 
@@ -136,39 +114,46 @@ class ServerBase {
 		return (! SystemInterface.isError (this.parseConfiguration (configParams)));
 	}
 
-	// Start the server's operation and invoke the provided callback when complete, with an "err" parameter (non-null if an error occurred). If the start operation succeeds, isRunning is set to true.
+	// Start the server's operation and invoke startCallback (err) when complete. If the start operation succeeds, isRunning is set to true.
 	start (startCallback) {
+		let starterror;
+
 		if (! this.isConfigured) {
-			process.nextTick (function () {
+			process.nextTick (() => {
 				startCallback ("Invalid configuration");
 			});
 			return;
 		}
 
-		this.doStart ((err) => {
-			if (err == null) {
+		starterror = undefined;
+		this.doStart ().catch ((err) => {
+			starterror = err;
+		}).then (() => {
+			if (starterror === undefined) {
 				this.isRunning = true;
 			}
-			startCallback (err);
+			startCallback (starterror);
 		});
 	}
 
-	// Execute subclass-specific start operations and invoke the provided callback when complete, with an "err" parameter (non-null if an error occurred)
-	doStart (startCallback) {
+	// Execute subclass-specific start operations
+	async doStart () {
 		// Default implementation does nothing
-		process.nextTick (startCallback);
 	}
 
-	// Stop the server's operation and set isRunning to false, and invoke the provided callback when complete
+	// Stop the server's operation, set isRunning to false, and invoke stopCallback when complete
 	stop (stopCallback) {
 		this.isRunning = false;
-		this.doStop (stopCallback);
+		this.doStop ().catch ((err) => {
+			Log.debug (`${this.name} doStop failed; err=${err}`);
+		}).then (() => {
+			stopCallback ();
+		});
 	}
 
-	// Execute subclass-specific stop operations and invoke the provided callback when complete
-	doStop (stopCallback) {
+	// Execute subclass-specific stop operations
+	async doStop () {
 		// Default implementation does nothing
-		process.nextTick (stopCallback);
 	}
 
 	// Return a command invocation containing the server's status, or null if the server is not active
@@ -176,7 +161,6 @@ class ServerBase {
 		if (! this.isRunning) {
 			return (null);
 		}
-
 		return (this.doGetStatus ());
 	}
 
@@ -188,14 +172,11 @@ class ServerBase {
 
 	// Set a server status field in the provided AgentStatus params object
 	setStatus (fields) {
-		let cmd, fieldname;
-
-		cmd = this.getStatus ();
+		const cmd = this.getStatus ();
 		if (cmd == null) {
 			return;
 		}
-
-		fields[this.getAgentStatusKey ()] = cmd.params;
+		fields[this.agentStatusKey] = cmd.params;
 	}
 
 	// Return a boolean value indicating if the provided AgentStatus command contains a server status change
@@ -203,7 +184,6 @@ class ServerBase {
 		if (! this.isRunning) {
 			return (false);
 		}
-
 		return (this.doFindStatusChange (agentStatus));
 	}
 
@@ -215,17 +195,15 @@ class ServerBase {
 
 	// Provide server configuration data by adding an appropriate field to an AgentConfiguration params object
 	getConfiguration (agentConfiguration) {
-		let c;
-
-		c = { };
-		for (let i in this.baseConfiguration) {
+		const c = { };
+		for (const i in this.baseConfiguration) {
 			c[i] = this.baseConfiguration[i];
 		}
-		for (let i in this.deltaConfiguration) {
+		for (const i in this.deltaConfiguration) {
 			c[i] = this.deltaConfiguration[i];
 		}
 		this.doGetConfiguration (c);
-		agentConfiguration[this.getAgentConfigurationKey ()] = c;
+		agentConfiguration[this.agentConfigurationKey] = c;
 	}
 
 	// Add subclass-specific fields to the provided server configuration object, covering default values not present in the delta configuration
@@ -234,17 +212,76 @@ class ServerBase {
 	}
 
 	// Return an object containing a command with the default agent prefix and the provided parameters, or null if the command could not be validated, in which case an error log message is generated
-	createCommand (commandName, commandType, commandParams) {
-		let cmd;
-
-		cmd = SystemInterface.createCommand (App.systemAgent.getCommandPrefix (), commandName, commandType, commandParams);
+	createCommand (commandName, commandParams) {
+		const cmd = SystemInterface.createCommand (App.systemAgent.getCommandPrefix (), commandName, commandParams);
 		if (SystemInterface.isError (cmd)) {
-			Log.err (`${this.toString ()} failed to create command invocation; commandName=${commandName} err=${cmd}`);
+			Log.err (`${this.name} failed to create command invocation; commandName=${commandName} err=${cmd}`);
 			return (null);
 		}
-
 		return (cmd);
 	}
-}
 
+	// Set an invocation handler for the specified path and command name, using the server's async method of the same name as the handler function
+	addInvokeRequestHandler (invokePath, commandName) {
+		const methodname = StringUtil.uncapitalized (commandName);
+		if (typeof this[methodname] != "function") {
+			throw Error (`Missing ${this.name} command handler for ${commandName}`);
+		}
+		App.systemAgent.addInvokeRequestHandler (invokePath, commandName, (cmdInv, request, response) => {
+			const token = cmdInv.prefix[SystemInterface.Constant.AuthorizationTokenPrefixField];
+			if (token !== undefined) {
+				App.systemAgent.accessControl.setSessionSustained (token, true);
+			}
+
+			this[methodname] (cmdInv, request, response).catch ((err) => {
+				Log.err (`${this.name} ${commandName} command failed; err=${err}`);
+				App.systemAgent.writeCommandResponse (request, response, this.createCommand ("CommandResult", {
+					success: false
+				}));
+			}).then (() => {
+				if (token !== undefined) {
+					App.systemAgent.accessControl.setSessionSustained (token, false);
+				}
+			});
+		});
+	}
+
+	// Set a secondary invocation handler for the specified path and command name, using the server's async method of the same name as the handler function
+	addSecondaryInvokeRequestHandler (invokePath, commandName) {
+		const methodname = StringUtil.uncapitalized (commandName);
+		if (typeof this[methodname] != "function") {
+			throw Error (`Missing ${this.name} command handler for ${commandName}`);
+		}
+		App.systemAgent.addSecondaryInvokeRequestHandler (invokePath, commandName, (cmdInv, request, response) => {
+			const token = cmdInv.prefix[SystemInterface.Constant.AuthorizationTokenPrefixField];
+			if (token !== undefined) {
+				App.systemAgent.accessControl.setSessionSustained (token, true);
+			}
+
+			this[methodname] (cmdInv, request, response).catch ((err) => {
+				Log.err (`${this.name} ${commandName} command failed; err=${err}`);
+				App.systemAgent.writeCommandResponse (request, response, this.createCommand ("CommandResult", {
+					success: false
+				}));
+			}).then (() => {
+				if (token !== undefined) {
+					App.systemAgent.accessControl.setSessionSustained (token, false);
+				}
+			});
+		});
+	}
+
+	// Set a link command for the specified command name, using the server's async method of the same name as the handler function
+	addLinkCommandHandler (commandName) {
+		const methodname = StringUtil.uncapitalized (commandName);
+		if (typeof this[methodname] != "function") {
+			throw Error (`Missing ${this.name} command handler for ${commandName}`);
+		}
+		App.systemAgent.addLinkCommandHandler (commandName, (cmdInv, client) => {
+			this[methodname] (cmdInv, client).catch ((err) => {
+				Log.err (`${this.name} ${commandName} command failed; err=${err}`);
+			});
+		});
+	}
+}
 module.exports = ServerBase;

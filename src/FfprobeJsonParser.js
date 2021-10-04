@@ -1,5 +1,5 @@
 /*
-* Copyright 2018-2019 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
+* Copyright 2018-2021 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are met:
@@ -30,9 +30,6 @@
 // Class that parses json-formatted data from an ffprobe process and stores gathered metadata fields
 
 "use strict";
-
-const App = global.App || { };
-const Log = require (App.SOURCE_DIRECTORY + "/Log");
 
 class FfprobeJsonParser {
 	constructor (sourceName) {
@@ -74,7 +71,7 @@ class FfprobeJsonParser {
 
 	// End parsing and extract metadata from received ffprobe output lines
 	close () {
-		let d, format, n, matches;
+		let d, n;
 
 		this.isClosed = true;
 		try {
@@ -83,6 +80,7 @@ class FfprobeJsonParser {
 		catch (e) {
 			return;
 		}
+
 		this.isParseSuccess = false;
 		this.videoStreamIndex = null;
 		this.audioStreamIndex = null;
@@ -95,7 +93,7 @@ class FfprobeJsonParser {
 		this.videoBitrate = null;
 		this.frameRate = null;
 
-		format = d.format;
+		const format = d.format;
 		if ((typeof format == "object") && (format != null)) {
 			n = parseFloat (format.duration);
 			if (isNaN (n) || (n <= 0)) {
@@ -111,7 +109,7 @@ class FfprobeJsonParser {
 		}
 
 		if (Array.isArray (d.streams)) {
-			for (let stream of d.streams) {
+			for (const stream of d.streams) {
 				if ((stream.codec_type == "video") && (this.videoStreamIndex == null)) {
 					this.videoStreamIndex = stream.index;
 					if (typeof this.videoStreamIndex != "number") {
@@ -147,7 +145,7 @@ class FfprobeJsonParser {
 					if (typeof stream.avg_frame_rate != "string") {
 						return;
 					}
-					matches = stream.avg_frame_rate.match (/([0-9]+)\/([0-9]+)/);
+					const matches = stream.avg_frame_rate.match (/([0-9]+)\/([0-9]+)/);
 					if (matches == null) {
 						return;
 					}

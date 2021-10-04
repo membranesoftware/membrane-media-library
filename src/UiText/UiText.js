@@ -1,5 +1,5 @@
 /*
-* Copyright 2018-2019 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
+* Copyright 2018-2021 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are met:
@@ -33,9 +33,9 @@
 
 const App = global.App || { };
 const Path = require ("path");
-const Log = require (App.SOURCE_DIRECTORY + '/Log');
+const Log = require (Path.join (App.SOURCE_DIRECTORY, "Log"));
 
-const DEFAULT_LANGUAGE = "en";
+const DefaultLanguage = "en";
 
 class UiText {
 	constructor (language) {
@@ -46,6 +46,7 @@ class UiText {
 	// Load text strings of the desired language, or the default language if not specified
 	load (language) {
 		let strings;
+
 		if ((typeof language == "string") && (language != "")) {
 			try {
 				strings = require (Path.join (App.SOURCE_DIRECTORY, "UiText", `${language}.js`));
@@ -62,7 +63,7 @@ class UiText {
 			}
 		}
 
-		language = DEFAULT_LANGUAGE;
+		language = DefaultLanguage;
 		try {
 			strings = require (Path.join (App.SOURCE_DIRECTORY, "UiText", `${language}.js`));
 		}
@@ -78,9 +79,7 @@ class UiText {
 
 	// Return the text string matching the specified key, or an empty string if no such string was found
 	getText (key) {
-		let s;
-
-		s = this.strings[key];
+		const s = this.strings[key];
 		return ((typeof s == "string") ? s : "");
 	}
 }

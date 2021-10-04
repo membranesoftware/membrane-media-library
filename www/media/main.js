@@ -1,3 +1,47 @@
+// Post a command to the host agent and invoke callback (err, responseCommand) when complete
+function postCommand (cmdInv, callback) {
+	window.superagent.post ("/")
+		.set ("Content-Type", "application/json")
+		.set ("Accept", "application/json")
+		.send (cmdInv)
+		.end ((err, res) => {
+			let cmd;
+
+			if (err != null) {
+				callback (err, null);
+				return;
+			}
+
+			try {
+				cmd = JSON.parse (res.text);
+			}
+			catch (e) {
+				callback ("Failed to parse response command");
+				return;
+			}
+			callback (null, cmd);
+		});
+}
+
+// Set a property in the document element with the specified ID, if it exists
+function setElementProperty (id, propertyName, propertyValue) {
+	let e;
+
+	e = document.getElementById (id);
+	if (e != null) {
+		e[propertyName] = propertyValue;
+	}
+}
+
+// Set a style property in the document element with the specified ID, if it exists
+function setElementStyle (id, propertyName, propertyValue) {
+	let e;
+
+	e = document.getElementById (id);
+	if (e != null) {
+		e.style[propertyName] = propertyValue;
+	}
+}
 class IndexDiv extends React.Component {
 	constructor (props) {
 		super (props);
@@ -15,14 +59,19 @@ class IndexDiv extends React.Component {
 
 		this.streamServerStatus = { };
 
-		for (let key of [ "searchKeyChanged", "searchKeyKeyPressed", "searchButtonClicked", "loadButtonClicked" ]) {
+		for (const key of [
+			"searchKeyChanged",
+			"searchKeyKeyPressed",
+			"searchButtonClicked",
+			"loadButtonClicked"
+		]) {
 			this[key] = this[key].bind (this);
 		}
 
 		window.superagent.post ("/media-data")
 			.set ("Content-Type", "application/json")
 			.set ("Accept", "application/json")
-			.send (SystemInterface.createCommand ({ }, "GetStatus", SystemInterface.Constant.Stream))
+			.send (SystemInterface.createCommand ({ }, "GetStatus"))
 			.end ((err, res) => {
 				let cmd;
 
@@ -55,11 +104,11 @@ class IndexDiv extends React.Component {
 
 			img = "";
 			if (item.segmentCount > 0) {
-				cmd = SystemInterface.createCommand ({ }, "GetThumbnailImage", SystemInterface.Constant.Stream, {
+				cmd = SystemInterface.createCommand ({ }, "GetThumbnailImage", {
 					id: item.id,
 					thumbnailIndex: Math.floor (item.segmentCount / 4)
 				});
-				src = `${this.streamServerStatus.thumbnailPath}?${SystemInterface.Constant.UrlQueryParameter}=${encodeURI (JSON.stringify (cmd))}`;
+				src = `${this.streamServerStatus.thumbnailPath}?${SystemInterface.Constant.UrlQueryParameter}=${encodeURIComponent (JSON.stringify (cmd))}`;
 				img = <img className="card-image" src={src}></img>;
 			}
 
@@ -145,7 +194,7 @@ class IndexDiv extends React.Component {
 		window.superagent.post ("/media-data")
 			.set ("Content-Type", "application/json")
 			.set ("Accept", "application/json")
-			.send (SystemInterface.createCommand ({ }, "FindItems", SystemInterface.Constant.Stream, {
+			.send (SystemInterface.createCommand ({ }, "FindStreamItems", {
 				searchKey: (this.searchKey != "") ? this.searchKey : "*",
 				resultOffset: this.resultOffset,
 				maxResults: this.pageSize
@@ -160,7 +209,7 @@ class IndexDiv extends React.Component {
 
 				try {
 					cmd = JSON.parse (res.text);
-					if ((cmd.command != SystemInterface.CommandId.FindStreamsResult) || (cmd.params.streams == null)) {
+					if ((cmd.command != SystemInterface.CommandId.FindStreamItemsResult) || (cmd.params.streams == null)) {
 						throw Error ();
 					}
 				}

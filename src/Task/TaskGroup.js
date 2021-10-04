@@ -1,5 +1,5 @@
 /*
-* Copyright 2018-2019 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
+* Copyright 2018-2021 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are met:
@@ -32,11 +32,13 @@
 "use strict";
 
 const App = global.App || { };
+const Path = require ("path");
 const EventEmitter = require ("events").EventEmitter;
-const Log = require (App.SOURCE_DIRECTORY + "/Log");
-const SystemInterface = require (App.SOURCE_DIRECTORY + "/SystemInterface");
-const RepeatTask = require (App.SOURCE_DIRECTORY + "/RepeatTask");
-const Task = require (App.SOURCE_DIRECTORY + "/Task/Task");
+const Log = require (Path.join (App.SOURCE_DIRECTORY, "Log"));
+const SystemInterface = require (Path.join (App.SOURCE_DIRECTORY, "SystemInterface"));
+const RepeatTask = require (Path.join (App.SOURCE_DIRECTORY, "RepeatTask"));
+
+const IdleEvent = "idle";
 
 class TaskGroup {
 	constructor () {
@@ -55,8 +57,10 @@ class TaskGroup {
 		// A map of task ID values to cached TaskItem objects, used to publish event record updates
 		this.taskRecordMap = { };
 
-		this.eventEmitter = new EventEmitter ();
-		this.eventEmitter.setMaxListeners (0);
+		this.statusEventEmitter = new EventEmitter ();
+		this.statusEventEmitter.setMaxListeners (0);
+		this.taskEventEmitter = new EventEmitter ();
+		this.taskEventEmitter.setMaxListeners (0);
 		this.updateTask = new RepeatTask ();
 	}
 
@@ -64,7 +68,7 @@ class TaskGroup {
 	start () {
 		this.updateTask.setRepeating ((callback) => {
 			this.update (callback);
-		}, App.HEARTBEAT_PERIOD, App.HEARTBEAT_PERIOD * 2);
+		}, App.HeartbeatPeriod, App.HeartbeatPeriod * 2);
 	}
 
 	// Stop the task group's operation
@@ -74,7 +78,7 @@ class TaskGroup {
 
 	// Update the task group's run state and execute the provided callback when complete
 	update (endCallback) {
-		let mintask, items, mapitem, taskitem, shouldremove, shouldwrite, cmd;
+		let mintask, shouldremove, shouldwrite;
 
 		while (true) {
 			if (this.runCount >= this.maxRunCount) {
@@ -82,11 +86,10 @@ class TaskGroup {
 			}
 
 			mintask = null;
-			for (let task of Object.values (this.taskMap)) {
+			for (const task of Object.values (this.taskMap)) {
 				if (task.isRunning || (task.startTime > 0)) {
 					continue;
 				}
-
 				if ((mintask == null) || (task.createTime < mintask.createTime)) {
 					mintask = task;
 				}
@@ -104,11 +107,10 @@ class TaskGroup {
 			}
 		}
 
-		items = Object.values (this.taskMap);
-		for (let task of items) {
-			taskitem = task.getTaskItem ();
-			mapitem = this.taskRecordMap[task.id];
-
+		const items = Object.values (this.taskMap);
+		for (const task of items) {
+			const taskitem = task.getTaskItem ();
+			const mapitem = this.taskRecordMap[task.id];
 			shouldwrite = false;
 			if (mapitem == null) {
 				shouldwrite = true;
@@ -117,11 +119,9 @@ class TaskGroup {
 				if ((! shouldwrite) && (mapitem.percentComplete != taskitem.percentComplete)) {
 					shouldwrite = true;
 				}
-
 				if ((! shouldwrite) && (mapitem.isRunning != taskitem.isRunning)) {
 					shouldwrite = true;
 				}
-
 				if ((! shouldwrite) && (mapitem.endTime != taskitem.endTime)) {
 					shouldwrite = true;
 				}
@@ -129,9 +129,9 @@ class TaskGroup {
 			this.taskRecordMap[task.id] = taskitem;
 
 			if (shouldwrite) {
-				cmd = SystemInterface.createCommand (App.systemAgent.getCommandPrefix (), "TaskItem", SystemInterface.Constant.Admin, taskitem);
+				const cmd = SystemInterface.createCommand (App.systemAgent.getCommandPrefix (), "TaskItem", taskitem);
 				if (! SystemInterface.isError (cmd)) {
-					this.eventEmitter.emit (task.id, cmd);
+					this.taskEventEmitter.emit (task.id, cmd);
 				}
 			}
 		}
@@ -141,7 +141,7 @@ class TaskGroup {
 		this.runTaskName = "";
 		this.runTaskSubtitle = "";
 		this.runTaskPercentComplete = 0;
-		for (let task of items) {
+		for (const task of items) {
 			shouldremove = false;
 			if ((task.startTime > 0) && (task.endTime > 0)) {
 				shouldremove = true;
@@ -149,7 +149,6 @@ class TaskGroup {
 			else if ((task.startTime <= 0) && task.isCancelled) {
 				shouldremove = true;
 			}
-
 			if (shouldremove) {
 				this.removeTask (task.id);
 				continue;
@@ -169,6 +168,15 @@ class TaskGroup {
 		process.nextTick (endCallback);
 	}
 
+	// Execute the provided callback on the next run list empty event
+	onIdle (callback) {
+		if (Object.keys (this.taskMap).length <= 0) {
+			setImmediate (callback);
+			return;
+		}
+		this.statusEventEmitter.once (IdleEvent, callback);
+	}
+
 	// Add a task to the run queue, assigning its ID value in the process. If endCallback is provided, set the task to invoke that function when it completes.
 	runTask (task, endCallback) {
 		task.id = App.systemAgent.getUuid (SystemInterface.CommandId.TaskItem);
@@ -182,9 +190,7 @@ class TaskGroup {
 
 	// Cancel a task, as specified in the provided CancelTask command
 	cancelTask (cmdInv) {
-		let task;
-
-		task = this.taskMap[cmdInv.params.taskId];
+		const task = this.taskMap[cmdInv.params.taskId];
 		if (task == null) {
 			return;
 		}
@@ -194,11 +200,9 @@ class TaskGroup {
 	}
 
 	// Handle a ReadTasks command received from a link client
-	readTasks (client, cmdInv) {
-		let cmd;
-
-		for (let task of Object.values (this.taskMap)) {
-			cmd = SystemInterface.createCommand (App.systemAgent.getCommandPrefix (), "TaskItem", SystemInterface.Constant.Admin, task.getTaskItem ());
+	readTasks (cmdInv, client) {
+		for (const task of Object.values (this.taskMap)) {
+			const cmd = SystemInterface.createCommand (App.systemAgent.getCommandPrefix (), "TaskItem", task.getTaskItem ());
 			if (SystemInterface.isError (cmd)) {
 				Log.err (`Failed to create TaskItem command: ${cmd}`);
 				continue;
@@ -208,23 +212,19 @@ class TaskGroup {
 	}
 
 	// Handle a WatchTasks command received from a link client
-	watchTasks (client, cmdInv) {
-		let addListener;
-
-		addListener = (taskId) => {
-			let execute;
-
-			execute = (taskItemCommand) => {
+	watchTasks (cmdInv, client) {
+		const addListener = (taskId) => {
+			const execute = (taskItemCommand) => {
 				client.emit (SystemInterface.Constant.WebSocketEvent, taskItemCommand);
 			};
 
-			this.eventEmitter.addListener (taskId, execute);
+			this.taskEventEmitter.addListener (taskId, execute);
 			client.once ("disconnect", () => {
-				this.eventEmitter.removeListener (taskId, execute);
+				this.taskEventEmitter.removeListener (taskId, execute);
 			});
 		};
 
-		for (let id of cmdInv.params.taskIds) {
+		for (const id of cmdInv.params.taskIds) {
 			addListener (id);
 		}
 	}
@@ -236,10 +236,13 @@ class TaskGroup {
 
 	// Remove the specified task from the task map and associated components
 	removeTask (taskId) {
+		const count = Object.keys (this.taskMap).length;
 		delete (this.taskMap[taskId]);
 		delete (this.taskRecordMap[taskId]);
-		this.eventEmitter.removeAllListeners (taskId);
+		this.taskEventEmitter.removeAllListeners (taskId);
+		if ((count > 0) && (Object.keys (this.taskMap).length <= 0)) {
+			this.statusEventEmitter.emit (IdleEvent);
+		}
 	}
 }
-
 module.exports = TaskGroup;

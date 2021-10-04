@@ -1,5 +1,5 @@
 /*
-* Copyright 2018-2019 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
+* Copyright 2018-2021 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are met:
@@ -32,61 +32,29 @@
 "use strict";
 
 const App = global.App || { };
-const Crypto = require ("crypto");
-const Fs = require ("fs");
-const Result = require (App.SOURCE_DIRECTORY + "/Result");
-const Log = require (App.SOURCE_DIRECTORY + "/Log");
-const SystemInterface = require (App.SOURCE_DIRECTORY + "/SystemInterface");
+const Path = require ("path");
+const Log = require (Path.join (App.SOURCE_DIRECTORY, "Log"));
+const SystemInterface = require (Path.join (App.SOURCE_DIRECTORY, "SystemInterface"));
 
 class TaskBase {
 	constructor () {
-		// Set this value to specify the task's name
+		// Read-only data members
 		this.name = "Task";
-
-		// Set this value to specify the task's ID (a UUID string)
-		this.id = "00000000-0000-0000-0000-000000000000";
-
-		// Set this value to specify the task's subtitle
 		this.subtitle = "";
-
-		// Populate this list with SystemInterface Type field items to specify parameters acceptable for task configuration
 		this.configureParams = [ ];
-
-		// Fields in this object are set by the configure method, using items from the configureParams list
 		this.configureMap = { };
-
-		// Set values in this map that should be included in status report strings
-		this.statusMap = { };
-
-		// This value holds the task's creation time
-		this.createTime = new Date ().getTime ();
-
-		// This value holds the task's start time
+		this.createTime = Date.now ();
+		this.isRunning = false;
+		this.isSuccess = false;
+		this.isCancelled = false;
+		this.resultObjectType = "";
+		this.resultObject = { };
 		this.startTime = 0;
-
-		// This value holds the task's end time
 		this.endTime = 0;
 
-		// Set this value to a function that should be executed when the task ends, providing the task object as a function argument
+		this.id = "00000000-0000-0000-0000-000000000000";
 		this.endCallback = null;
-
-		// This value indicates if the task is running
-		this.isRunning = false;
-
-		// This value indicates if the task completed successfully
-		this.isSuccess = false;
-
-		// This value indicates if the task has been cancelled
-		this.isCancelled = false;
-
-		// Set this value to a SystemInterface type name that will be stored in resultObject if the task succeeds
-		this.resultObjectType = "";
-
-		// Set this value to an object containing information about the task's result, suitable for reference in an end callback
-		this.resultObject = { };
-
-		// Set this value to specify the command type that should be used in TaskItem records created from the task
-		this.recordCommandType = SystemInterface.Constant.DefaultCommandType;
+		this.statusMap = { };
 	}
 
 	// Return a string representation of the task
@@ -95,7 +63,7 @@ class TaskBase {
 
 		s = `<Task id=${this.id} name="${this.name}"`;
 		if (Object.keys (this.statusMap).length > 0) {
-			s += " " + JSON.stringify (this.statusMap);
+			s += ` ${JSON.stringify (this.statusMap)}`;
 		}
 		if (this.isRunning) {
 			s += " isRunning";
@@ -111,20 +79,14 @@ class TaskBase {
 		return (s);
 	}
 
-	// Configure the task using values in the provided params object. Returns a Result value.
+	// Configure the task using values in the provided params object
 	configure (configParams) {
-		let fields;
-
-		fields = SystemInterface.parseFields (this.configureParams, configParams);
+		const fields = SystemInterface.parseFields (this.configureParams, configParams);
 		if (SystemInterface.isError (fields)) {
-			Log.err (`${this.toString ()} configuration parse error; configParams=${JSON.stringify (configParams)} err=${fields}`);
-			return (Result.INVALID_PARAMS);
+			throw Error (`${this.toString ()} configuration parse error; configParams=${JSON.stringify (configParams)} err=${fields}`);
 		}
-
 		this.configureMap = fields;
 		this.doConfigure ();
-
-		return (Result.SUCCESS);
 	}
 
 	// Return a SystemInterface TaskItem object with fields populated from the task
@@ -145,11 +107,11 @@ class TaskBase {
 		if (this.isRunning) {
 			return;
 		}
-
 		this.isRunning = true;
 		this.statusMap.isRunning = true;
-		this.startTime = new Date ().getTime ();
+		this.startTime = Date.now ();
 		this.setPercentComplete (0);
+
 		this.doRun ();
 	}
 
@@ -159,7 +121,7 @@ class TaskBase {
 
 		this.isRunning = false;
 		delete (this.statusMap["isRunning"]);
-		this.endTime = new Date ().getTime ();
+		this.endTime = Date.now ();
 
 		if (this.isSuccess && (this.resultObjectType != "")) {
 			result = SystemInterface.parseTypeObject (this.resultObjectType, this.resultObject);
@@ -180,7 +142,6 @@ class TaskBase {
 		if (this.isCancelled) {
 			return;
 		}
-
 		this.isCancelled = true;
 		this.doCancel ();
 	}
@@ -193,7 +154,7 @@ class TaskBase {
 	// Subclass method. Implementations should execute task actions and call end when complete.
 	doRun (cmdInv) {
 		// Default implementation does nothing
-		process.nextTick (() => {
+		setImmediate (() => {
 			this.isSuccess = true;
 			this.end ();
 		});

@@ -1,3 +1,47 @@
+// Post a command to the host agent and invoke callback (err, responseCommand) when complete
+function postCommand (cmdInv, callback) {
+	window.superagent.post ("/")
+		.set ("Content-Type", "application/json")
+		.set ("Accept", "application/json")
+		.send (cmdInv)
+		.end ((err, res) => {
+			let cmd;
+
+			if (err != null) {
+				callback (err, null);
+				return;
+			}
+
+			try {
+				cmd = JSON.parse (res.text);
+			}
+			catch (e) {
+				callback ("Failed to parse response command");
+				return;
+			}
+			callback (null, cmd);
+		});
+}
+
+// Set a property in the document element with the specified ID, if it exists
+function setElementProperty (id, propertyName, propertyValue) {
+	let e;
+
+	e = document.getElementById (id);
+	if (e != null) {
+		e[propertyName] = propertyValue;
+	}
+}
+
+// Set a style property in the document element with the specified ID, if it exists
+function setElementStyle (id, propertyName, propertyValue) {
+	let e;
+
+	e = document.getElementById (id);
+	if (e != null) {
+		e.style[propertyName] = propertyValue;
+	}
+}
 function main () {
 	let playerWidth, id;
 
@@ -7,7 +51,7 @@ function main () {
 	window.superagent.post ("/media-data")
 		.set ("Content-Type", "application/json")
 		.set ("Accept", "application/json")
-		.send (SystemInterface.createCommand ({ }, "GetStreamItem", SystemInterface.Constant.Stream, {
+		.send (SystemInterface.createCommand ({ }, "GetStreamItem", {
 			streamId: id
 		}))
 		.end ((err, res) => {
@@ -17,11 +61,10 @@ function main () {
 				console.log (`Failed to get media data: ${err}`);
 				return;
 			}
-
 			try {
 				stream = JSON.parse (res.text);
 				if (stream.command != SystemInterface.CommandId.StreamItem) {
-					throw Error ();
+					throw Error ("Invalid stream data");
 				}
 			}
 			catch (e) {
@@ -29,6 +72,7 @@ function main () {
 				return;
 			}
 
+			document.title = `Membrane Media Library - ${stream.params.name}`;
 			setElementProperty ("title-header", "innerHTML", stream.params.name);
 
 			text = "";
@@ -53,14 +97,14 @@ function main () {
 
 			video = document.createElement ("video");
 			if ((typeof video.canPlayType == "function") && video.canPlayType ("application/x-mpegURL")) {
-				cmd = SystemInterface.createCommand ({ }, "GetHlsManifest", SystemInterface.Constant.Stream, {
+				cmd = SystemInterface.createCommand ({ }, "GetHlsManifest", {
 					streamId: stream.params.id
 				});
 				srcurl = `/str/b.m3u8?${SystemInterface.Constant.UrlQueryParameter}=${encodeURIComponent (JSON.stringify (cmd))}`;
 				setElementProperty ("video-player", "src", srcurl);
 			}
 			else {
-				cmd = SystemInterface.createCommand ({ }, "GetDashMpd", SystemInterface.Constant.Stream, {
+				cmd = SystemInterface.createCommand ({ }, "GetDashMpd", {
 					streamId: stream.params.id
 				});
 				srcurl = `/str/e.mpd?${SystemInterface.Constant.UrlQueryParameter}=${encodeURIComponent (JSON.stringify (cmd))}`;
