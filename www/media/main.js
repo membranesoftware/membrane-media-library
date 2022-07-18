@@ -83,11 +83,11 @@ class IndexDiv extends React.Component {
 				try {
 					cmd = JSON.parse (res.text);
 					if (cmd.command != SystemInterface.CommandId.StreamServerStatus) {
-						throw Error ();
+						throw Error ("Invalid server response");
 					}
 				}
 				catch (e) {
-					console.log (`Failed to get media server status: received non-parsing response`);
+					console.log (`Failed to get media server status: ${e}`);
 					return;
 				}
 
@@ -203,18 +203,17 @@ class IndexDiv extends React.Component {
 				let cmd, streams, morecount;
 
 				if (err != null) {
-					console.log (`Failed to get media data: ${err}`);
+					console.log (`Failed to get stream data: ${err}`);
 					return;
 				}
-
 				try {
 					cmd = JSON.parse (res.text);
 					if ((cmd.command != SystemInterface.CommandId.FindStreamItemsResult) || (cmd.params.streams == null)) {
-						throw Error ();
+						throw Error ("Invalid server response");
 					}
 				}
 				catch (e) {
-					console.log (`Failed to get media data: received non-parsing response`);
+					console.log (`Failed to get stream data: ${e}`);
 					return;
 				}
 

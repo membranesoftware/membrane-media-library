@@ -1,5 +1,5 @@
 /*
-* Copyright 2018-2021 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
+* Copyright 2018-2022 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are met:
@@ -72,25 +72,25 @@ class AccessControl {
 	// Create a new authorization session using the provided Authorize command and return a response command
 	authorize (cmdInv) {
 		if ((typeof cmdInv != "object") || (cmdInv == null)) {
-			return (SystemInterface.createCommand ({ }, "CommandResult", {
+			return (SystemInterface.createCommand ({ }, SystemInterface.CommandId.CommandResult, {
 				success: false,
 				error: "Authorization failed"
 			}));
 		}
 		if (cmdInv.command != SystemInterface.CommandId.Authorize) {
-			return (SystemInterface.createCommand ({ }, "CommandResult", {
+			return (SystemInterface.createCommand ({ }, SystemInterface.CommandId.CommandResult, {
 				success: false,
 				error: "Authorization failed"
 			}));
 		}
 		if (typeof cmdInv.prefix[SystemInterface.Constant.AuthorizationHashPrefixField] != "string") {
-			return (SystemInterface.createCommand ({ }, "CommandResult", {
+			return (SystemInterface.createCommand ({ }, SystemInterface.CommandId.CommandResult, {
 				success: false,
 				error: "Authorization failed"
 			}));
 		}
 		if (cmdInv.params.token.length < App.AuthorizeTokenLength) {
-			return (SystemInterface.createCommand ({ }, "CommandResult", {
+			return (SystemInterface.createCommand ({ }, SystemInterface.CommandId.CommandResult, {
 				success: false,
 				error: "Authorization failed"
 			}));
@@ -106,14 +106,14 @@ class AccessControl {
 			}
 		);
 		if (auth != cmdInv.prefix[SystemInterface.Constant.AuthorizationHashPrefixField]) {
-			return (SystemInterface.createCommand ({ }, "CommandResult", {
+			return (SystemInterface.createCommand ({ }, SystemInterface.CommandId.CommandResult, {
 				success: false,
 				error: "Authorization failed"
 			}));
 		}
 
 		const token = this.createSession ();
-		return (SystemInterface.createCommand (App.systemAgent.getCommandPrefix (), "AuthorizeResult", {
+		return (SystemInterface.createCommand (App.systemAgent.getCommandPrefix (), SystemInterface.CommandId.AuthorizeResult, {
 			token: token
 		}));
 	}

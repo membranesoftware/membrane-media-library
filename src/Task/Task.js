@@ -1,5 +1,5 @@
 /*
-* Copyright 2018-2021 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
+* Copyright 2018-2022 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are met:
@@ -27,62 +27,112 @@
 * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 * POSSIBILITY OF SUCH DAMAGE.
 */
-// Task subclasses and utility functions
+// Class that runs a task function, as executed by TaskGroup
 
 "use strict";
 
-const TaskTypes = require ("./types");
-
-exports.TaskTypes = TaskTypes;
-
-// Return a new task of the specified type name that has been configured with the provided parameters object
-exports.createTask = (typeName, configureParams) => {
-	const tasktype = TaskTypes[typeName];
-	if (tasktype == null) {
-		throw Error (`Unknown task type ${typeName}`);
-	}
-
-	const task = new tasktype ();
-	if ((typeof configureParams != "object") || (configureParams == null)) {
-		configureParams = { };
-	}
-	task.configure (configureParams);
-	return (task);
-};
-
-// Execute a task of the specified type name and configuration and invoke endCallback (err, resultObject) when complete. If endCallback is not provided, instead return a promise that executes the task.
-exports.executeTask = (typeName, configureParams, endCallback) => {
-	const execute = (executeCallback) => {
-		const task = exports.createTask (typeName, configureParams);
-		if (task == null) {
-			executeCallback ("Invalid task configuration", null);
-			return;
+class Task {
+	constructor (configureMap) {
+		// Read-only data members
+		this.name = "Task";
+		this.subtitle = "";
+		this.configureMap = configureMap;
+		if ((typeof this.configureMap != "object") || (this.configureMap == null)) {
+			this.configureMap = { };
 		}
+		this.createTime = Date.now ();
+		this.isRunning = false;
+		this.isSuccess = false;
+		this.isCancelled = false;
+		this.isEnded = false;
+		this.resultObjectType = "";
+		this.resultObject = { };
+		this.startTime = 0;
+		this.endTime = 0;
+		this.runError = "";
 
-		task.endCallback = () => {
-			if (! task.isSuccess) {
-				executeCallback ("Task completed with non-success result", null);
-				return;
-			}
-
-			executeCallback (null, task.resultObject);
+		this.id = "00000000-0000-0000-0000-000000000000";
+		this.statusMap = {
+			percentComplete: 0
 		};
-
-		task.run ();
-	};
-
-	if (typeof endCallback == "function") {
-		execute (endCallback);
 	}
-	else {
-		return (new Promise ((resolve, reject) => {
-			execute ((err, resultObject) => {
-				if (err != null) {
-					reject (Error (err));
-					return;
-				}
-				resolve (resultObject);
-			});
-		}));
+
+	// Return a string representation of the task
+	toString () {
+		let s;
+
+		s = `<Task id=${this.id} name="${this.name}"`;
+		if (Object.keys (this.statusMap).length > 0) {
+			s += ` ${JSON.stringify (this.statusMap)}`;
+		}
+		if (this.isRunning) {
+			s += " isRunning";
+		}
+		if (this.isCancelled) {
+			s += " isCancelled";
+		}
+		if (this.isSuccess) {
+			s += " isSuccess";
+		}
+		s += ">";
+
+		return (s);
 	}
-};
+
+	// Execute the task's operations
+	async run () {
+		// Default implementation does nothing
+	}
+
+	// Execute operations to end a task run
+	async end () {
+		// Default implementation does nothing
+	}
+
+	// Execute operations to cancel the task while running
+	async cancel () {
+		// Default implementation does nothing
+	}
+
+	// Return a SystemInterface TaskItem object with fields populated from the task
+	getTaskItem () {
+		return ({
+			id: this.id,
+			name: this.name,
+			subtitle: this.subtitle,
+			isRunning: this.isRunning,
+			percentComplete: this.getPercentComplete (),
+			createTime: this.createTime,
+			endTime: this.endTime
+		});
+	}
+
+	// Return the percent complete value for the task
+	getPercentComplete () {
+		return (typeof this.statusMap.percentComplete == "number" ? Math.floor (this.statusMap.percentComplete) : 0);
+	}
+
+	// Set the percent complete value for the task
+	setPercentComplete (value) {
+		if (value < 0) {
+			value = 0;
+		}
+		if (value > 100) {
+			value = 100;
+		}
+		this.statusMap.percentComplete = value;
+	}
+
+	// Add the specified delta to the percent complete value for the task
+	addPercentComplete (value) {
+		this.setPercentComplete (this.statusMap.percentComplete + value);
+	}
+
+	// Throw an error if the task has been cancelled
+	cancelBreak () {
+		if (this.isCancelled) {
+			throw Error ("Task cancelled");
+		}
+	}
+}
+module.exports = Task;

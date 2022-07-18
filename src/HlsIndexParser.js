@@ -1,5 +1,5 @@
 /*
-* Copyright 2018-2021 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
+* Copyright 2018-2022 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are met:
@@ -38,7 +38,6 @@ exports.parse = (indexData) => {
 	if (typeof indexData != "string") {
 		return (null);
 	}
-
 	const data = {
 		segmentCount: 0,
 		segmentFilenames: [ ],
@@ -87,6 +86,5 @@ exports.parse = (indexData) => {
 	if (data.segmentCount <= 0) {
 		return (null);
 	}
-
 	return (data);
 };

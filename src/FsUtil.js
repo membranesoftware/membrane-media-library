@@ -1,5 +1,5 @@
 /*
-* Copyright 2018-2021 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
+* Copyright 2018-2022 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are met:
@@ -662,6 +662,27 @@ exports.fileExistsSync = (path) => {
 exports.renameFile = (oldPath, newPath, endCallback) => {
 	const execute = (executeCallback) => {
 		Fs.rename (oldPath, newPath, executeCallback);
+	};
+	if (typeof endCallback == "function") {
+		execute (endCallback);
+	}
+	else {
+		return (new Promise ((resolve, reject) => {
+			execute ((err) => {
+				if (err != null) {
+					reject (err);
+					return;
+				}
+				resolve ();
+			});
+		}));
+	}
+};
+
+// Create a file link and invoke endCallback (err) when complete. If endCallback is not provided, instead return a promise that executes the operation.
+exports.createLink = (existingPath, newPath, endCallback) => {
+	const execute = (executeCallback) => {
+		Fs.link (existingPath, newPath, executeCallback);
 	};
 	if (typeof endCallback == "function") {
 		execute (endCallback);

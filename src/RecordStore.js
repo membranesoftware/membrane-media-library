@@ -1,5 +1,5 @@
 /*
-* Copyright 2018-2021 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
+* Copyright 2018-2022 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are met:
@@ -448,6 +448,11 @@ class RecordStore {
 		delete (this.cache[recordId]);
 	}
 
+	// Remove any cache entry matching the provided recordId
+	expireCacheRecord (recordId) {
+		delete (this.cache[recordId]);
+	}
+
 	// Remove expired entries from the cache record map and schedule a timeout to repeat the operation if needed
 	expireCache () {
 		const now = Date.now ();
@@ -627,9 +632,9 @@ class RecordStore {
 						}, App.StoreRunPeriod * 1000);
 					}
 				};
-				proc = new ExecProcess (App.MongodPath,
-					[ "-f", Path.join (this.dataPath, "mongod.conf") ],
-					processData, processEnded);
+				proc = new ExecProcess (App.MongodPath, [ "-f", Path.join (this.dataPath, "mongod.conf") ]);
+				proc.onReadLines (processData);
+				proc.onEnd (processEnded);
 				proc.workingPath = this.dataPath;
 			});
 		}
@@ -668,18 +673,6 @@ class RecordStore {
 
 		this.isRunning = true;
 		this.eventEmitter.emit (ReadyEvent);
-	}
-
-	// Return a string value representing the provided search key, suitable for use as a $regex key in a selection criteria object
-	getSearchKeyRegex (searchKey) {
-		let key;
-
-		key = searchKey;
-		key = key.trim ();
-		key = key.replace (/[^0-9a-zA-Z* ]/g, "");
-		key = key.replace (/\*/g, ".*");
-
-		return (key);
 	}
 }
 module.exports = RecordStore;

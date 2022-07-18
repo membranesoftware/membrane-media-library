@@ -1,5 +1,5 @@
 /*
-* Copyright 2018-2021 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
+* Copyright 2018-2022 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are met:
@@ -37,7 +37,8 @@ const FsUtil = require (Path.join (App.SOURCE_DIRECTORY, "FsUtil"));
 const StringUtil = require (Path.join (App.SOURCE_DIRECTORY, "StringUtil"));
 const SystemInterface = require (Path.join (App.SOURCE_DIRECTORY, "SystemInterface"));
 const RepeatTask = require (Path.join (App.SOURCE_DIRECTORY, "RepeatTask"));
-const Task = require (Path.join (App.SOURCE_DIRECTORY, "Task", "Task"));
+const GetDiskSpaceTask = require (Path.join (App.SOURCE_DIRECTORY, "Task", "GetDiskSpaceTask"));
+const CreateMediaStreamTask = require (Path.join (App.SOURCE_DIRECTORY, "Task", "CreateMediaStreamTask"));
 const ServerBase = require (Path.join (App.SOURCE_DIRECTORY, "Server", "ServerBase"));
 
 const StreamWebrootPath = "/str";
@@ -71,25 +72,25 @@ class StreamServer extends ServerBase {
 		this.freeStorage = 0; // bytes
 		this.usedStorage = 0; // bytes
 		this.getDiskSpaceTask = new RepeatTask ();
+		this.getDiskSpaceTask.setAsync ((err) => {
+			Log.debug (`${this.name} failed to get free disk space; err=${err}`);
+		});
 		this.streamCount = 0;
 	}
 
 	// Execute subclass-specific start operations
 	async doStart () {
 		await FsUtil.createDirectory (this.configureMap.dataPath);
-		const df = await Task.executeTask ("GetDiskSpace", { targetPath: this.configureMap.dataPath });
-		this.totalStorage = df.total;
-		this.usedStorage = df.used;
-		this.freeStorage = df.free;
+		await this.getDiskSpace ();
 
-		this.addInvokeRequestHandler (SystemInterface.Constant.DefaultInvokePath, "ConfigureMediaStream");
-		this.addInvokeRequestHandler (SystemInterface.Constant.DefaultInvokePath, "RemoveStream");
-		this.addLinkCommandHandler ("FindStreamItems");
-		this.addLinkCommandHandler ("FindMediaStreams");
-		this.addSecondaryInvokeRequestHandler (ThumbnailPath, "GetThumbnailImage");
-		this.addSecondaryInvokeRequestHandler (HlsStreamPath, "GetHlsManifest");
-		this.addSecondaryInvokeRequestHandler (HlsSegmentPath, "GetHlsSegment");
-		this.addSecondaryInvokeRequestHandler (DashMpdPath, "GetDashMpd");
+		this.addInvokeRequestHandler (SystemInterface.Constant.DefaultInvokePath, SystemInterface.CommandId.ConfigureMediaStream);
+		this.addInvokeRequestHandler (SystemInterface.Constant.DefaultInvokePath, SystemInterface.CommandId.RemoveStream);
+		this.addLinkCommandHandler (SystemInterface.CommandId.FindStreamItems);
+		this.addLinkCommandHandler (SystemInterface.CommandId.FindMediaStreams);
+		this.addSecondaryInvokeRequestHandler (ThumbnailPath, SystemInterface.CommandId.GetThumbnailImage);
+		this.addSecondaryInvokeRequestHandler (HlsStreamPath, SystemInterface.CommandId.GetHlsManifest);
+		this.addSecondaryInvokeRequestHandler (HlsSegmentPath, SystemInterface.CommandId.GetHlsSegment);
+		this.addSecondaryInvokeRequestHandler (DashMpdPath, SystemInterface.CommandId.GetDashMpd);
 		App.systemAgent.addSecondaryRequestHandler (DashSegmentPath, (request, response) => {
 			this.getDashSegment (request, response).catch ((err) => {
 				Log.err (`${this.name} GetDashSegment failed; err=${err}`);
@@ -100,41 +101,31 @@ class StreamServer extends ServerBase {
 		App.systemAgent.addSecondaryWebroot (StreamWebrootPath, StreamWebrootPath);
 		App.systemAgent.addSecondaryWebroot (PlayerWebrootPath, PlayerWebrootPath);
 		App.systemAgent.addSecondaryWebroot (CatalogWebrootPath, CatalogWebrootPath);
-		this.addSecondaryInvokeRequestHandler (CatalogDataPath, "GetStreamItem");
-		App.systemAgent.addSecondaryInvokeRequestHandler (CatalogDataPath, "FindStreamItems", (cmdInv, request, response) => {
+		this.addSecondaryInvokeRequestHandler (CatalogDataPath, SystemInterface.CommandId.GetStreamItem);
+		App.systemAgent.addSecondaryInvokeRequestHandler (CatalogDataPath, SystemInterface.CommandId.FindStreamItems, (cmdInv, request, response) => {
 			this.handleFindStreamItemsRequest (cmdInv, request, response).catch ((err) => {
 				Log.err (`${this.name} FindStreamItems command failed; err=${err}`);
 				App.systemAgent.writeResponse (request, response, 500);
 			});
 		});
-		App.systemAgent.addSecondaryInvokeRequestHandler (CatalogDataPath, "GetStatus", (cmdInv, request, response) => {
+		App.systemAgent.addSecondaryInvokeRequestHandler (CatalogDataPath, SystemInterface.CommandId.GetStatus, (cmdInv, request, response) => {
+			response.setHeader ("Content-Type", "application/json");
 			App.systemAgent.writeResponse (request, response, 200, JSON.stringify (this.getStatus ()));
 		});
 
 		App.systemAgent.recordStore.onReady (() => {
-			this.createIndexes ().then (() => {
-				return (this.verifyStreamItems ());
-			}).then (() => {
-				return (this.readRecords ());
-			}).then (() => {
+			const init = async () => {
+				await this.createIndexes ();
+				await this.verifyStreamItems ();
+				await this.readRecords ();
 				this.isReady = true;
-			}).catch ((err) => {
-				Log.err (`Failed to read stream records; err=${err}`);
+			};
+			init ().catch ((err) => {
+				Log.err (`Failed to read stored stream records; err=${err}`);
 			});
 		});
 
-		this.getDiskSpaceTask.setRepeating ((callback) => {
-			App.systemAgent.taskGroup.onIdle (() => {
-				Task.executeTask ("GetDiskSpace", { targetPath: this.configureMap.dataPath }).then ((resultObject) => {
-					this.totalStorage = resultObject.total;
-					this.usedStorage = resultObject.used;
-					this.freeStorage = resultObject.free;
-					callback ();
-				}).catch ((err) => {
-					callback ();
-				});
-			});
-		}, GetDiskSpacePeriod);
+		this.getDiskSpaceTask.setRepeating (this.getDiskSpace.bind (this), GetDiskSpacePeriod);
 
 		App.systemAgent.getApplicationNews ();
 	}
@@ -146,7 +137,7 @@ class StreamServer extends ServerBase {
 
 	// Return a command invocation containing the server's status
 	doGetStatus () {
-		return (this.createCommand ("StreamServerStatus", {
+		return (App.systemAgent.createCommand (SystemInterface.CommandId.StreamServerStatus, {
 			isReady: this.isReady,
 			streamCount: this.streamCount,
 			freeStorage: this.freeStorage,
@@ -172,6 +163,18 @@ class StreamServer extends ServerBase {
 
 		for (const index of indexes) {
 			await App.systemAgent.recordStore.createIndex (index);
+		}
+	}
+
+	// Update free disk space values
+	async getDiskSpace () {
+		const task = await App.systemAgent.runBackgroundTask (new GetDiskSpaceTask ({
+			targetPath: this.configureMap.dataPath
+		}));
+		if (task.isSuccess) {
+			this.totalStorage = task.resultObject.total;
+			this.usedStorage = task.resultObject.used;
+			this.freeStorage = task.resultObject.free;
 		}
 	}
 
@@ -241,12 +244,8 @@ class StreamServer extends ServerBase {
 		const crit = {
 			command: SystemInterface.CommandId.StreamItem
 		};
-		if ((cmdInv.params.searchKey != "") && (cmdInv.params.searchKey != "*")) {
-			crit["params.name"] = {
-				"$regex": App.systemAgent.recordStore.getSearchKeyRegex (cmdInv.params.searchKey),
-				"$options": "i"
-			};
-		}
+		this.addFindCrits (crit, cmdInv.params.searchKey);
+
 		const sort = {
 			"params.name": 1
 		};
@@ -258,7 +257,7 @@ class StreamServer extends ServerBase {
 			resultOffset: cmdInv.params.resultOffset
 		};
 		findresult.setSize = await App.systemAgent.recordStore.countRecords (crit);
-		client.emit (SystemInterface.Constant.WebSocketEvent, this.createCommand ("FindStreamItemsResult", findresult));
+		client.emit (SystemInterface.Constant.WebSocketEvent, App.systemAgent.createCommand (SystemInterface.CommandId.FindStreamItemsResult, findresult));
 		if (findresult.setSize <= 0) {
 			await App.systemAgent.recordStore.findRecords ((record, callback) => {
 				SystemInterface.populateDefaultFields (record.params, SystemInterface.Type[record.commandName]);
@@ -286,7 +285,7 @@ class StreamServer extends ServerBase {
 				streams.push (record);
 				process.nextTick (callback);
 			}, crit, sort);
-			client.emit (SystemInterface.Constant.WebSocketEvent, this.createCommand ("FindMediaStreamsResult", {
+			client.emit (SystemInterface.Constant.WebSocketEvent, App.systemAgent.createCommand (SystemInterface.CommandId.FindMediaStreamsResult, {
 				mediaId: id,
 				streams: streams
 			}));
@@ -295,38 +294,42 @@ class StreamServer extends ServerBase {
 
 	// Execute a ConfigureMediaStream command
 	async configureMediaStream (cmdInv, request, response) {
-		let mediapath;
+		let mediapath, tags;
 
 		if (await App.systemAgent.recordStore.recordExists ({
 			command: SystemInterface.CommandId.StreamItem,
 			"params.sourceId": cmdInv.params.mediaId,
 			"params.profile": cmdInv.params.profile
 		})) {
-			App.systemAgent.writeCommandResponse (request, response, this.createCommand ("CommandResult", {
+			App.systemAgent.writeCommandResponse (request, response, App.systemAgent.createCommand (SystemInterface.CommandId.CommandResult, {
 				success: true
 			}));
 			return;
 		}
 
 		mediapath = "";
+		tags = [ ];
 		if (cmdInv.params.mediaServerAgentId == App.systemAgent.agentId) {
 			const mediaitem = await App.systemAgent.recordStore.findCommandRecord (SystemInterface.CommandId.MediaItem, cmdInv.params.mediaId);
 			if (mediaitem != null) {
 				mediapath = mediaitem.params.mediaPath;
+				if (Array.isArray (mediaitem.params.tags)) {
+					tags = mediaitem.params.tags;
+				}
 			}
 		}
 		if (mediapath == "") {
 			mediapath = cmdInv.params.mediaUrl;
 		}
 		if (mediapath == "") {
-			App.systemAgent.writeCommandResponse (request, response, this.createCommand ("CommandResult", {
+			App.systemAgent.writeCommandResponse (request, response, App.systemAgent.createCommand (SystemInterface.CommandId.CommandResult, {
 				success: false,
 				error: "Media item not found"
 			}));
 			return;
 		}
 
-		App.systemAgent.writeCommandResponse (request, response, this.createCommand ("CommandResult", {
+		App.systemAgent.writeCommandResponse (request, response, App.systemAgent.createCommand (SystemInterface.CommandId.CommandResult, {
 			success: true
 		}));
 		const oldstreams = await App.systemAgent.recordStore.findAllRecords ({
@@ -343,7 +346,7 @@ class StreamServer extends ServerBase {
 		}
 
 		try {
-			await App.systemAgent.runTask ("CreateMediaStream", {
+			await App.systemAgent.runTask (new CreateMediaStreamTask ({
 				streamId: App.systemAgent.getUuid (SystemInterface.CommandId.StreamItem),
 				streamName: cmdInv.params.streamName,
 				mediaId: cmdInv.params.mediaId,
@@ -351,8 +354,9 @@ class StreamServer extends ServerBase {
 				dataPath: this.configureMap.dataPath,
 				mediaWidth: cmdInv.params.mediaWidth,
 				mediaHeight: cmdInv.params.mediaHeight,
-				profile: cmdInv.params.profile
-			});
+				profile: cmdInv.params.profile,
+				tags: tags
+			}));
 			await this.readRecords ();
 		}
 		catch (err) {
@@ -362,7 +366,7 @@ class StreamServer extends ServerBase {
 
 	// Execute a RemoveStream command
 	async removeStream (cmdInv, request, response) {
-		App.systemAgent.writeCommandResponse (request, response, this.createCommand ("CommandResult", {
+		App.systemAgent.writeCommandResponse (request, response, App.systemAgent.createCommand (SystemInterface.CommandId.CommandResult, {
 			success: true
 		}));
 		const item = await App.systemAgent.recordStore.findCommandRecord (SystemInterface.CommandId.StreamItem, cmdInv.params.id);
@@ -376,12 +380,8 @@ class StreamServer extends ServerBase {
 		const crit = {
 			command: SystemInterface.CommandId.StreamItem
 		};
-		if ((cmdInv.params.searchKey != "") && (cmdInv.params.searchKey != "*")) {
-			crit["params.name"] = {
-				"$regex": App.systemAgent.recordStore.getSearchKeyRegex (cmdInv.params.searchKey),
-				"$options": "i"
-			};
-		}
+		this.addFindCrits (crit, cmdInv.params.searchKey);
+
 		const sort = {
 			"params.name": 1
 		};
@@ -404,7 +404,7 @@ class StreamServer extends ServerBase {
 				process.nextTick (callback);
 			}, crit, sort, max, skip);
 		}
-		App.systemAgent.writeCommandResponse (request, response, this.createCommand ("FindStreamItemsResult", findresult));
+		App.systemAgent.writeCommandResponse (request, response, App.systemAgent.createCommand (SystemInterface.CommandId.FindStreamItemsResult, findresult));
 	}
 
 	// Execute a GetStreamItem command
@@ -430,7 +430,6 @@ class StreamServer extends ServerBase {
 				App.systemAgent.writeResponse (request, response, 500);
 				return;
 			}
-
 			data = data.toString ();
 			data = data.replace (/init-stream\$RepresentationID\$.m4s/g, `${DashSegmentPath}?streamId=${cmdInv.params.streamId}&amp;representationIndex=$$RepresentationID$$&amp;segmentIndex=0`);
 			data = data.replace (/chunk-stream\$RepresentationID\$-\$Number%05d\$.m4s/g, `${DashSegmentPath}?streamId=${cmdInv.params.streamId}&amp;representationIndex=$$RepresentationID$$&amp;segmentIndex=$$Number%05d$$`);
@@ -449,7 +448,6 @@ class StreamServer extends ServerBase {
 			App.systemAgent.writeResponse (request, response, 400);
 			return;
 		}
-
 		const streamid = url.searchParams.get ("streamId");
 		const ri = url.searchParams.get ("representationIndex");
 		const si = url.searchParams.get ("segmentIndex");
@@ -491,7 +489,6 @@ class StreamServer extends ServerBase {
 			App.systemAgent.writeResponse (request, response, 404);
 			return;
 		}
-
 		indexdata = "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-ALLOW-CACHE:NO\n";
 		if (item.params.hlsTargetDuration > 0) {
 			indexdata += `#EXT-X-TARGETDURATION:${item.params.hlsTargetDuration}\n`;
@@ -527,7 +524,7 @@ class StreamServer extends ServerBase {
 
 		for (let i = firstsegment; i < item.params.segmentCount; ++i) {
 			indexdata += `#EXTINF:${item.params.segmentLengths[i]},\n`;
-			segmentcmd = this.createCommand ("GetHlsSegment", {
+			segmentcmd = App.systemAgent.createCommand (SystemInterface.CommandId.GetHlsSegment, {
 				streamId: cmdInv.params.streamId,
 				segmentIndex: i
 			});

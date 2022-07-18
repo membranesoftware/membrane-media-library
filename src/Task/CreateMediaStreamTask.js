@@ -1,5 +1,5 @@
 /*
-* Copyright 2018-2021 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
+* Copyright 2018-2022 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are met:
@@ -31,14 +31,14 @@
 
 const App = global.App || { };
 const Path = require ("path");
-const Log = require (Path.join (App.SOURCE_DIRECTORY, "Log"));
 const SystemInterface = require (Path.join (App.SOURCE_DIRECTORY, "SystemInterface"));
 const FsUtil = require (Path.join (App.SOURCE_DIRECTORY, "FsUtil"));
 const FfmpegUtil = require (Path.join (App.SOURCE_DIRECTORY, "FfmpegUtil"));
 const FfprobeJsonParser = require (Path.join (App.SOURCE_DIRECTORY, "FfprobeJsonParser"));
 const FfmpegOutputParser = require (Path.join (App.SOURCE_DIRECTORY, "FfmpegOutputParser"));
 const HlsIndexParser = require (Path.join (App.SOURCE_DIRECTORY, "HlsIndexParser"));
-const TaskBase = require (Path.join (App.SOURCE_DIRECTORY, "Task", "TaskBase"));
+const Task = require (Path.join (App.SOURCE_DIRECTORY, "Task", "Task"));
+const Log = require (Path.join (App.SOURCE_DIRECTORY, "Log"));
 
 const DefaultVideoCodec = "libx264";
 const DefaultAudioCodec = "aac";
@@ -101,9 +101,9 @@ ProfileMap[SystemInterface.Constant.FastPreviewStreamProfile] = {
 	}
 };
 
-class CreateMediaStream extends TaskBase {
-	constructor () {
-		super ();
+class CreateMediaStreamTask extends Task {
+	constructor (configureMap) {
+		super (configureMap);
 		this.name = App.uiText.getText ("CreateMediaStreamTaskName");
 
 		this.configureParams = [
@@ -155,6 +155,13 @@ class CreateMediaStream extends TaskBase {
 				flags: SystemInterface.ParamFlag.Required | SystemInterface.ParamFlag.ZeroOrGreater,
 				description: "The profile type to use for encoding the stream",
 				defaultValue: 0
+			},
+			{
+				name: "tags",
+				type: "array",
+				containerType: "string",
+				flags: SystemInterface.ParamFlag.NotEmpty,
+				description: "An array of strings containing keyword search matches"
 			}
 		];
 
@@ -167,28 +174,20 @@ class CreateMediaStream extends TaskBase {
 		this.hlsMetadata = { };
 	}
 
-	// Subclass method. Implementations should execute actions appropriate when the task has been successfully configured.
-	doConfigure () {
+	async run () {
+		let w, h, vb;
+
+		const fields = SystemInterface.parseFields (this.configureParams, this.configureMap);
+		if (SystemInterface.isError (fields)) {
+			throw Error (`${this.toString ()} configuration parse failed; err=${fields}`);
+		}
+		this.configureMap = fields;
 		this.subtitle = this.configureMap.streamName;
 		this.statusMap.streamName = this.configureMap.streamName;
 		this.streamDataPath = Path.join (this.configureMap.dataPath, this.configureMap.streamId);
-
 		if (ProfileMap[this.configureMap.profile] === undefined) {
 			this.configureMap.profile = SystemInterface.Constant.SourceMatchStreamProfile;
 		}
-	}
-
-	// Subclass method. Implementations should execute task actions and call end when complete.
-	doRun () {
-		this.createStream ().catch ((err) => {
-			Log.err (`Failed to create stream; streamName="${this.configureMap.streamName}" err=${err}`);
-		}).then (() => {
-			this.end ();
-		});
-	}
-
-	async createStream () {
-		let w, h, vb;
 
 		// TODO: Fetch media data from a remote host if mediaPath holds a URL value
 		this.sourcePath = this.configureMap.mediaPath;
@@ -202,6 +201,7 @@ class CreateMediaStream extends TaskBase {
 		await FsUtil.createDirectory (Path.join (this.streamDataPath, App.StreamHlsPath));
 		await FsUtil.createDirectory (Path.join (this.streamDataPath, App.StreamDashPath));
 		await this.readSourceMetadata ();
+		this.cancelBreak ();
 
 		this.destMetadata = {
 			duration: this.sourceParser.duration
@@ -277,15 +277,27 @@ class CreateMediaStream extends TaskBase {
 			segmentCount: this.hlsMetadata.segmentCount,
 			segmentFilenames: this.hlsMetadata.segmentFilenames,
 			segmentLengths: this.hlsMetadata.segmentLengths,
-			segmentPositions: this.hlsMetadata.segmentPositions
+			segmentPositions: this.hlsMetadata.segmentPositions,
+			tags: this.configureMap.tags
 		};
-		const streamitem = App.systemAgent.createCommand ("StreamItem", params);
+		const streamitem = App.systemAgent.createCommand (SystemInterface.CommandId.StreamItem, params);
 		if (streamitem == null) {
 			throw Error ("Failed to create StreamItem command");
 		}
 		await App.systemAgent.recordStore.storeRecord (streamitem);
 		this.setPercentComplete (100);
 		this.isSuccess = true;
+	}
+
+	async end () {
+		if (this.isSuccess && (! this.isCancelled)) {
+			return;
+		}
+		FsUtil.removeDirectory (this.streamDataPath, (err) => {
+			if (err != null) {
+				Log.debug (`${this.toString ()} failed to remove data directory; streamDataPath=${this.streamDataPath} err=${err}`);
+			}
+		});
 	}
 
 	// Read metadata from the source media file and store the resulting parser object in this.sourceParser
@@ -452,16 +464,6 @@ class CreateMediaStream extends TaskBase {
 		return (streamsize);
 	}
 
-	// Subclass method. Implementations should execute actions appropriate when the task has ended.
-	doEnd () {
-		if (this.isSuccess && (! this.isCancelled)) {
-			return;
-		}
-
-		FsUtil.removeDirectory (this.streamDataPath, (err) => {
-		});
-	}
-
 	// Add items to an ffmpeg args array, as appropriate for the specified codec and the configured video profile
 	addVideoProfileArguments (codecName, args) {
 		args.push ("-vcodec", codecName);
@@ -485,4 +487,4 @@ class CreateMediaStream extends TaskBase {
 		args.push ("-r", this.destMetadata.frameRate);
 	}
 }
-module.exports = CreateMediaStream;
+module.exports = CreateMediaStreamTask;

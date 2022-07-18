@@ -1,5 +1,5 @@
 /*
-* Copyright 2018-2021 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
+* Copyright 2018-2022 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are met:
@@ -211,33 +211,25 @@ class ServerBase {
 		// Default implementation does nothing
 	}
 
-	// Return an object containing a command with the default agent prefix and the provided parameters, or null if the command could not be validated, in which case an error log message is generated
-	createCommand (commandName, commandParams) {
-		const cmd = SystemInterface.createCommand (App.systemAgent.getCommandPrefix (), commandName, commandParams);
-		if (SystemInterface.isError (cmd)) {
-			Log.err (`${this.name} failed to create command invocation; commandName=${commandName} err=${cmd}`);
-			return (null);
+	// Set an invocation handler for the specified path and command ID, using the server's async method with the matching command name as the handler function
+	addInvokeRequestHandler (invokePath, commandId) {
+		const cmdname = SystemInterface.getCommandName (commandId);
+		if (cmdname == "") {
+			throw Error (`Unknown command ID ${commandId}`);
 		}
-		return (cmd);
-	}
-
-	// Set an invocation handler for the specified path and command name, using the server's async method of the same name as the handler function
-	addInvokeRequestHandler (invokePath, commandName) {
-		const methodname = StringUtil.uncapitalized (commandName);
+		const methodname = StringUtil.uncapitalized (cmdname);
 		if (typeof this[methodname] != "function") {
-			throw Error (`Missing ${this.name} command handler for ${commandName}`);
+			throw Error (`Missing ${this.name} command handler for ${cmdname}`);
 		}
-		App.systemAgent.addInvokeRequestHandler (invokePath, commandName, (cmdInv, request, response) => {
+		App.systemAgent.addInvokeRequestHandler (invokePath, commandId, (cmdInv, request, response) => {
 			const token = cmdInv.prefix[SystemInterface.Constant.AuthorizationTokenPrefixField];
 			if (token !== undefined) {
 				App.systemAgent.accessControl.setSessionSustained (token, true);
 			}
 
 			this[methodname] (cmdInv, request, response).catch ((err) => {
-				Log.err (`${this.name} ${commandName} command failed; err=${err}`);
-				App.systemAgent.writeCommandResponse (request, response, this.createCommand ("CommandResult", {
-					success: false
-				}));
+				Log.err (`${this.name} ${cmdname} command failed; err=${err}`);
+				App.systemAgent.writeResponse (request, response, 500);
 			}).then (() => {
 				if (token !== undefined) {
 					App.systemAgent.accessControl.setSessionSustained (token, false);
@@ -246,23 +238,25 @@ class ServerBase {
 		});
 	}
 
-	// Set a secondary invocation handler for the specified path and command name, using the server's async method of the same name as the handler function
-	addSecondaryInvokeRequestHandler (invokePath, commandName) {
-		const methodname = StringUtil.uncapitalized (commandName);
-		if (typeof this[methodname] != "function") {
-			throw Error (`Missing ${this.name} command handler for ${commandName}`);
+	// Set a secondary invocation handler for the specified path and command ID, using the server's async method with the matching command name as the handler function
+	addSecondaryInvokeRequestHandler (invokePath, commandId) {
+		const cmdname = SystemInterface.getCommandName (commandId);
+		if (cmdname == "") {
+			throw Error (`Unknown command ID ${commandId}`);
 		}
-		App.systemAgent.addSecondaryInvokeRequestHandler (invokePath, commandName, (cmdInv, request, response) => {
+		const methodname = StringUtil.uncapitalized (cmdname);
+		if (typeof this[methodname] != "function") {
+			throw Error (`Missing ${this.name} command handler for ${cmdname}`);
+		}
+		App.systemAgent.addSecondaryInvokeRequestHandler (invokePath, commandId, (cmdInv, request, response) => {
 			const token = cmdInv.prefix[SystemInterface.Constant.AuthorizationTokenPrefixField];
 			if (token !== undefined) {
 				App.systemAgent.accessControl.setSessionSustained (token, true);
 			}
 
 			this[methodname] (cmdInv, request, response).catch ((err) => {
-				Log.err (`${this.name} ${commandName} command failed; err=${err}`);
-				App.systemAgent.writeCommandResponse (request, response, this.createCommand ("CommandResult", {
-					success: false
-				}));
+				Log.err (`${this.name} ${cmdname} command failed; err=${err}`);
+				App.systemAgent.writeResponse (request, response, 500);
 			}).then (() => {
 				if (token !== undefined) {
 					App.systemAgent.accessControl.setSessionSustained (token, false);
@@ -271,17 +265,66 @@ class ServerBase {
 		});
 	}
 
-	// Set a link command for the specified command name, using the server's async method of the same name as the handler function
-	addLinkCommandHandler (commandName) {
-		const methodname = StringUtil.uncapitalized (commandName);
-		if (typeof this[methodname] != "function") {
-			throw Error (`Missing ${this.name} command handler for ${commandName}`);
+	// Set a link command handler for the specified command ID, using the server's async method with the matching command name as the handler function
+	addLinkCommandHandler (commandId) {
+		const cmdname = SystemInterface.getCommandName (commandId);
+		if (cmdname == "") {
+			throw Error (`Unknown command ID ${commandId}`);
 		}
-		App.systemAgent.addLinkCommandHandler (commandName, (cmdInv, client) => {
+		const methodname = StringUtil.uncapitalized (cmdname);
+		if (typeof this[methodname] != "function") {
+			throw Error (`Missing ${this.name} command handler for ${cmdname}`);
+		}
+		App.systemAgent.addLinkCommandHandler (commandId, (cmdInv, client) => {
 			this[methodname] (cmdInv, client).catch ((err) => {
-				Log.err (`${this.name} ${commandName} command failed; err=${err}`);
+				Log.err (`${this.name} ${cmdname} command failed; err=${err}`);
 			});
 		});
+	}
+
+	// Set crit fields for finding MediaItem or StreamItem records based on a searchKey string
+	addFindCrits (crit, searchKey) {
+		searchKey = searchKey.trim ();
+		if ((searchKey == "") || (searchKey == "*")) {
+			return;
+		}
+		const andcrits = [ ];
+		if (searchKey.match (/^\s*k:/)) {
+			const exprmatch = /\s*k:([0-9a-zA-Z]+)/g;
+			while (true) {
+				const matches = exprmatch.exec (searchKey);
+				if (matches == null) {
+					break;
+				}
+				const re = StringUtil.getSearchKeyRegex (matches[1]);
+				andcrits.push ({
+					"params.tags": {
+						"$regex": re.source,
+						"$options": re.flags
+					}
+				});
+			}
+		}
+		if (andcrits.length > 0) {
+			crit["$and"] = andcrits;
+		}
+		else {
+			const re = StringUtil.getSearchKeyRegex (searchKey);
+			crit["$or"] = [
+				{
+					"params.name": {
+						"$regex": re.source,
+						"$options": re.flags
+					}
+				},
+				{
+					"params.tags": {
+						"$regex": re.source,
+						"$options": re.flags
+					}
+				}
+			];
+		}
 	}
 }
 module.exports = ServerBase;

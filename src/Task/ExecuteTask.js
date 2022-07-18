@@ -1,5 +1,5 @@
 /*
-* Copyright 2018-2021 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
+* Copyright 2018-2022 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are met:
@@ -27,21 +27,28 @@
 * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 * POSSIBILITY OF SUCH DAMAGE.
 */
-// Export all files found in this directory
-
 "use strict";
 
-const Fs = require ("fs");
+const App = global.App || { };
+const Path = require ("path");
+const Task = require (Path.join (App.SOURCE_DIRECTORY, "Task", "Task"));
 
-const files = Fs.readdirSync (__dirname);
-for (let i = 0; i < files.length; ++i) {
-	const path = files[i];
-	if (path == "index.js") {
-		continue;
+class ExecuteTask extends Task {
+	constructor (configureMap) {
+		super (configureMap);
 	}
-	const m = path.match (/^(.*)\.js$/);
-	if (m == null) {
-		continue;
+
+	async run () {
+		if (typeof this.configureMap.run == "function") {
+			await this.configureMap.run ();
+		}
+		this.isSuccess = true;
 	}
-	exports[m[1]] = require (`./${path}`);
+
+	async end () {
+		if (typeof this.configureMap.end == "function") {
+			await this.configureMap.end ();
+		}
+	}
 }
+module.exports = ExecuteTask;

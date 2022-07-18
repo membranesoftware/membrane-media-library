@@ -1,5 +1,5 @@
 /*
-* Copyright 2018-2021 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
+* Copyright 2018-2022 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are met:
@@ -31,19 +31,19 @@
 
 const App = global.App || { };
 const Path = require ("path");
-const Log = require (Path.join (App.SOURCE_DIRECTORY, "Log"));
 const FsUtil = require (Path.join (App.SOURCE_DIRECTORY, "FsUtil"));
+const StringUtil = require (Path.join (App.SOURCE_DIRECTORY, "StringUtil"));
 const FfmpegUtil = require (Path.join (App.SOURCE_DIRECTORY, "FfmpegUtil"));
 const SystemInterface = require (Path.join (App.SOURCE_DIRECTORY, "SystemInterface"));
 const RepeatTask = require (Path.join (App.SOURCE_DIRECTORY, "RepeatTask"));
 const FfprobeJsonParser = require (Path.join (App.SOURCE_DIRECTORY, "FfprobeJsonParser"));
-const TaskBase = require (Path.join (App.SOURCE_DIRECTORY, "Task", "TaskBase"));
+const Task = require (Path.join (App.SOURCE_DIRECTORY, "Task", "Task"));
 
 const CountThumbnailFilesPeriod = 3000; // ms
 
-class ScanMediaFile extends TaskBase {
-	constructor () {
-		super ();
+class ScanMediaFileTask extends Task {
+	constructor (configureMap) {
+		super (configureMap);
 		this.name = App.uiText.getText ("ScanMediaFileTaskName");
 		this.resultObjectType = "MediaItem";
 
@@ -82,31 +82,19 @@ class ScanMediaFile extends TaskBase {
 		this.thumbnailCount = 0;
 	}
 
-	// Subclass method. Implementations should execute actions appropriate when the task has been successfully configured.
-	doConfigure () {
+	async run () {
+		const fields = SystemInterface.parseFields (this.configureParams, this.configureMap);
+		if (SystemInterface.isError (fields)) {
+			throw Error (`${this.toString ()} configuration parse failed; err=${fields}`);
+		}
+		this.configureMap = fields;
 		this.subtitle = Path.basename (this.configureMap.mediaPath);
 		this.statusMap.mediaPath = this.configureMap.mediaPath;
 		this.progressPercentDelta = 100 / (this.configureMap.mediaThumbnailCount + 2);
 		if (this.progressPercentDelta < 1) {
 			this.progressPercentDelta = 1;
 		}
-	}
 
-	// Subclass method. Implementations should execute actions appropriate when the task has ended.
-	doEnd () {
-		this.progressTask.stop ();
-	}
-
-	// Subclass method. Implementations should execute task actions and call end when complete.
-	doRun () {
-		this.processFile ().catch ((err) => {
-			Log.err (`Failed to scan media file; filename="${this.configureMap.mediaPath}" err=${err}`);
-		}).then (() => {
-			this.end ();
-		});
-	}
-
-	async processFile () {
 		const stats = await FsUtil.statFile (this.configureMap.mediaPath);
 		const record = {
 			id: this.configureMap.mediaId,
@@ -121,12 +109,13 @@ class ScanMediaFile extends TaskBase {
 			bitrate: 0,
 			isCreateStreamAvailable: true
 		};
+		record.sortKey = StringUtil.getMediaItemSortKey (record.name);
+
 		const parser = new FfprobeJsonParser (this.configureMap.mediaPath);
 		const processData = (lines, dataParseCallback) => {
 			parser.parseLines (lines);
 			process.nextTick (dataParseCallback);
 		};
-
 		await FfmpegUtil.runFfprobe ([
 			"-hide_banner",
 			"-loglevel", "quiet",
@@ -135,11 +124,11 @@ class ScanMediaFile extends TaskBase {
 			"-show_format",
 			"-show_streams"
 		], null, processData);
-
 		parser.close ();
 		if (! parser.isParseSuccess) {
 			throw Error ("Media metadata not found");
 		}
+		this.cancelBreak ();
 
 		record.duration = parser.duration;
 		record.frameRate = parser.frameRate;
@@ -149,11 +138,12 @@ class ScanMediaFile extends TaskBase {
 		this.sourceParser = parser;
 		this.addPercentComplete (this.progressPercentDelta);
 
-		const cmd = App.systemAgent.createCommand ("MediaItem", record);
+		const cmd = App.systemAgent.createCommand (SystemInterface.CommandId.MediaItem, record);
 		if (cmd == null) {
 			throw Error ("Failed to create MediaItem record");
 		}
 		await this.createThumbnails (record);
+		this.cancelBreak ();
 		await App.systemAgent.recordStore.upsertRecord ({
 			command: SystemInterface.CommandId.MediaItem,
 			"params.mediaPath": this.configureMap.mediaPath
@@ -161,6 +151,10 @@ class ScanMediaFile extends TaskBase {
 		this.isSuccess = true;
 		this.setPercentComplete (100);
 		this.resultObject = record;
+	}
+
+	async end () {
+		this.progressTask.stop ();
 	}
 
 	// Prepare thumbnail images for the provided MediaItem object
@@ -220,4 +214,4 @@ class ScanMediaFile extends TaskBase {
 		});
 	}
 }
-module.exports = ScanMediaFile;
+module.exports = ScanMediaFileTask;

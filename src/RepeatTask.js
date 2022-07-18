@@ -1,5 +1,5 @@
 /*
-* Copyright 2018-2021 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
+* Copyright 2018-2022 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are met:
@@ -44,6 +44,15 @@ class RepeatTask {
 		this.nextRepeatPeriod = 0;
 		this.minIntervalPeriod = 1000;
 		this.maxIntervalPeriod = 2000;
+		this.isAsync = false;
+		this.catchFn = (err) => { };
+		this.idleCallbacks = [ ];
+	}
+
+	// Set the task to execute its function using async/await, with catchFn as the catch function for thrown errors
+	setAsync (catchFn) {
+		this.isAsync = true;
+		this.catchFn = catchFn;
 	}
 
 	// Set the task for repeated execution at an interval period, specified in milliseconds. Task execution is performed using taskFunction, which must expect a single "callback" parameter for invocation when the task completes. maxIntervalPeriod can be omitted if a randomized repeat interval is not needed.
@@ -86,7 +95,6 @@ class RepeatTask {
 		if (this.isExecuting) {
 			return;
 		}
-
 		if (this.executeTimeout != null) {
 			clearTimeout (this.executeTimeout);
 			this.executeTimeout = null;
@@ -94,10 +102,17 @@ class RepeatTask {
 		this.isExecuting = true;
 		this.nextRepeatPeriod = 0;
 		this.nextExecuteTime = 0;
-		this.taskFunction (() => {
+
+		const endTask = () => {
 			let delay;
 
 			this.isExecuting = false;
+
+			for (const fn of this.idleCallbacks) {
+				setImmediate (fn);
+			}
+			this.idleCallbacks = [ ];
+
 			if (this.isRepeating && (! this.isSuspended)) {
 				if (this.nextRepeatPeriod > 0) {
 					delay = this.nextRepeatPeriod;
@@ -111,15 +126,27 @@ class RepeatTask {
 				}
 				this.setExecuteTimeout (delay);
 			}
-		}, this);
+		};
+
+		if (this.isAsync) {
+			this.taskFunction (this).catch (this.catchFn).then (endTask);
+		}
+		else {
+			this.taskFunction (endTask, this);
+		}
 	}
 
 	// Cancel any repeating execution that might be configured and clear the task function
 	stop () {
 		this.isRepeating = false;
-		this.taskFunction = (callback) => {
-			process.nextTick (callback);
-		};
+		if (this.isAsync) {
+			this.taskFunction = async () => { };
+		}
+		else {
+			this.taskFunction = (callback) => {
+				process.nextTick (callback);
+			};
+		}
 		if (this.executeTimeout != null) {
 			clearTimeout (this.executeTimeout);
 			this.executeTimeout = null;
@@ -167,7 +194,28 @@ class RepeatTask {
 		this.executeTimeout = setTimeout (() => {
 			this.execute ();
 		}, msElapsed);
+		this.executeTimeout.unref ();
 		this.nextExecuteTime = Date.now () + msElapsed;
+	}
+
+	// Execute callback at the next time the task is not executing
+	onIdle (callback) {
+		if (! this.isExecuting) {
+			callback ();
+			return;
+		}
+		this.idleCallbacks.push (callback);
+	}
+
+	// Return a promise that resolves when the task is not executing
+	async awaitIdle () {
+		await new Promise ((resolve, reject) => {
+			if (! this.isExecuting) {
+				resolve ();
+				return;
+			}
+			this.idleCallbacks.push (resolve);
+		});
 	}
 }
 module.exports = RepeatTask;

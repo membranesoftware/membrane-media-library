@@ -58,17 +58,17 @@ function main () {
 			let stream, cmd, srcurl, player, w, h, text, video;
 
 			if (err != null) {
-				console.log (`Failed to get media data: ${err}`);
+				console.log (`Failed to get stream data: ${err}`);
 				return;
 			}
 			try {
 				stream = JSON.parse (res.text);
 				if (stream.command != SystemInterface.CommandId.StreamItem) {
-					throw Error ("Invalid stream data");
+					throw Error ("Invalid server response");
 				}
 			}
 			catch (e) {
-				console.log (`Failed to get media data: received non-parsing response`);
+				console.log (`Failed to get stream data: ${e}`);
 				return;
 			}
 
@@ -94,6 +94,13 @@ function main () {
 				text += ` ${stream.params.frameRate}fps`;
 			}
 			setElementProperty ("detail-div", "innerHTML", text);
+
+			if ((stream.params.tags != null) && (stream.params.tags.length > 0)) {
+				setElementProperty ("tags-div", "innerHTML", stream.params.tags.join (", "));
+			}
+			else {
+				setElementProperty ("tags-div", "innerHTML", "(none)");
+			}
 
 			video = document.createElement ("video");
 			if ((typeof video.canPlayType == "function") && video.canPlayType ("application/x-mpegURL")) {

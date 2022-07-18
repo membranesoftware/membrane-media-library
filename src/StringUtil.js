@@ -1,5 +1,5 @@
 /*
-* Copyright 2018-2021 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
+* Copyright 2018-2022 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are met:
@@ -154,4 +154,39 @@ exports.parseUrl = (input, base) => {
 		url = null;
 	}
 	return (url);
+};
+
+// Return a RegExp suitable for use in a search key match of inputKey
+exports.getSearchKeyRegex = (inputKey) => {
+	let key, source, c;
+
+	key = inputKey;
+	key = key.trim ();
+	source = "";
+	const len = key.length;
+	for (let i = 0; i < len; ++i) {
+		c = key.charAt (i);
+		if (/\s/.test (c)) {
+			continue;
+		}
+		if (c == "*") {
+			c = ".*";
+		}
+		else if (/[^0-9a-zA-Z*]/.test (c)) {
+			c = "[^0-9a-zA-Z]{0,1}";
+		}
+		source = `${source}\\s*${c}`;
+	}
+	source = `^${source}`;
+
+	return (new RegExp (source, "i"));
+};
+
+// Return the value of inputKey after modification for use as a MediaItem sortKey field
+exports.getMediaItemSortKey = (inputKey) => {
+	let result;
+
+	result = inputKey.toLowerCase ();
+	result = result.replace (/[^a-zA-Z0-9]/g, "");
+	return (result);
 };

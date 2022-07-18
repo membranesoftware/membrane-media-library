@@ -1,5 +1,5 @@
 /*
-* Copyright 2018-2021 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
+* Copyright 2018-2022 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are met:
@@ -33,6 +33,7 @@
 
 const App = global.App || { };
 const Path = require ("path");
+const OsUtil = require (Path.join (App.SOURCE_DIRECTORY, "OsUtil"));
 const ExecProcess = require (Path.join (App.SOURCE_DIRECTORY, "ExecProcess"));
 
 // Return a newly created ExecProcess object that launches ffmpeg. workingPath defaults to the application data directory if empty.
@@ -42,10 +43,10 @@ exports.createFfmpegProcess = (runArgs, workingPath, processData, processEnded) 
 	runpath = App.FfmpegPath;
 	const env = { };
 	if (runpath == "") {
-		if (App.IsWindows) {
+		if (OsUtil.isWindows) {
 			runpath = "ffmpeg/bin/ffmpeg.exe";
 		}
-		else if (App.IsLinux) {
+		else if (OsUtil.isLinux) {
 			runpath = "ffmpeg/ffmpeg";
 			env.LD_LIBRARY_PATH = `${App.BIN_DIRECTORY}/ffmpeg/lib`;
 		}
@@ -54,10 +55,16 @@ exports.createFfmpegProcess = (runArgs, workingPath, processData, processEnded) 
 		}
 	}
 
-	const proc = new ExecProcess (runpath, runArgs, processData, processEnded);
+	const proc = new ExecProcess (runpath, runArgs);
 	proc.env = env;
 	if (typeof workingPath == "string") {
 		proc.workingPath = workingPath;
+	}
+	if (typeof processData == "function") {
+		proc.onReadLines (processData);
+	}
+	if (typeof processEnded == "function") {
+		proc.onEnd (processEnded);
 	}
 	return (proc);
 };
@@ -84,10 +91,10 @@ exports.createFfprobeProcess = (runArgs, workingPath, processData, processEnded)
 	runpath = App.FfmpegPath;
 	const env = { };
 	if (runpath == "") {
-		if (App.IsWindows) {
+		if (OsUtil.isWindows) {
 			runpath = "ffmpeg/bin/ffprobe.exe";
 		}
-		else if (App.IsLinux) {
+		else if (OsUtil.isLinux) {
 			runpath = "ffmpeg/ffprobe";
 			env.LD_LIBRARY_PATH = `${App.BIN_DIRECTORY}/ffmpeg/lib`;
 		}
@@ -96,10 +103,16 @@ exports.createFfprobeProcess = (runArgs, workingPath, processData, processEnded)
 		}
 	}
 
-	const proc = new ExecProcess (runpath, runArgs, processData, processEnded);
+	const proc = new ExecProcess (runpath, runArgs);
 	proc.env = env;
 	if (typeof workingPath == "string") {
 		proc.workingPath = workingPath;
+	}
+	if (typeof processData == "function") {
+		proc.onReadLines (processData);
+	}
+	if (typeof processEnded == "function") {
+		proc.onEnd (processEnded);
 	}
 	return (proc);
 };

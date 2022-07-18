@@ -1,5 +1,5 @@
 /*
-* Copyright 2018-2021 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
+* Copyright 2018-2022 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are met:
@@ -33,8 +33,10 @@ const App = global.App || { };
 const Path = require ("path");
 const Log = require (Path.join (App.SOURCE_DIRECTORY, "Log"));
 const FsUtil = require (Path.join (App.SOURCE_DIRECTORY, "FsUtil"));
-const RepeatTask = require (Path.join (App.SOURCE_DIRECTORY, "RepeatTask"));
+const StringUtil = require (Path.join (App.SOURCE_DIRECTORY, "StringUtil"));
 const SystemInterface = require (Path.join (App.SOURCE_DIRECTORY, "SystemInterface"));
+const RepeatTask = require (Path.join (App.SOURCE_DIRECTORY, "RepeatTask"));
+const ScanMediaFileTask = require (Path.join (App.SOURCE_DIRECTORY, "Task", "ScanMediaFileTask"));
 const ServerBase = require (Path.join (App.SOURCE_DIRECTORY, "Server", "ServerBase"));
 
 const MediaPath = "/med/a";
@@ -52,6 +54,7 @@ const MediaFileExtensions = [
 	".webm",
 	".divx"
 ];
+const ScanMediaIdleTimeThreshold = 30000; // ms
 
 class MediaServer extends ServerBase {
 	constructor () {
@@ -91,39 +94,40 @@ class MediaServer extends ServerBase {
 		this.isReady = false;
 		this.mediaCount = 0;
 		this.scanTask = new RepeatTask ();
-		this.scanTaskFn = (callback) => {
-			this.scan ().catch ((err) => {
-				Log.err (`Failed to scan media directory; err=${err}`);
-			}).then (() => {
-				callback ();
-			});
-		};
+		this.scanTask.setAsync ((err) => {
+			Log.err (`Failed to scan media directory; err=${err}`);
+		});
 	}
 
 	// Execute subclass-specific start operations
 	async doStart () {
 		await FsUtil.createDirectory (this.configureMap.dataPath);
 
-		this.addInvokeRequestHandler (SystemInterface.Constant.DefaultInvokePath, "ScanMediaItems");
-		this.addInvokeRequestHandler (SystemInterface.Constant.DefaultInvokePath, "RemoveMedia");
-		this.addLinkCommandHandler ("FindMediaItems");
-		this.addSecondaryInvokeRequestHandler (ThumbnailPath, "GetThumbnailImage");
-		this.addSecondaryInvokeRequestHandler (MediaPath, "GetMedia");
+		for (const cmdid of [
+			SystemInterface.CommandId.ScanMediaItems,
+			SystemInterface.CommandId.RemoveMedia,
+			SystemInterface.CommandId.AddMediaTag,
+			SystemInterface.CommandId.RemoveMediaTag
+		]) {
+			this.addInvokeRequestHandler (SystemInterface.Constant.DefaultInvokePath, cmdid);
+		}
 
-		if (this.configureMap.scanPeriod > 0) {
-			this.scanTask.setRepeating (this.scanTaskFn, this.configureMap.scanPeriod * 1000);
-		}
-		else {
-			this.scanTask.setOnDemand (this.scanTaskFn);
-		}
+		this.addLinkCommandHandler (SystemInterface.CommandId.FindMediaItems);
+		this.addSecondaryInvokeRequestHandler (ThumbnailPath, SystemInterface.CommandId.GetThumbnailImage);
+		this.addSecondaryInvokeRequestHandler (MediaPath, SystemInterface.CommandId.GetMedia);
 
 		App.systemAgent.recordStore.onReady (() => {
-			this.createIndexes ().then (() => {
-				return (this.readRecords ());
-			}).then (() => {
+			const init = async () => {
+				await this.createIndexes ();
+				await this.addSortKeys ();
+				await this.readRecords ();
+				if (this.configureMap.scanPeriod > 0) {
+					this.scanTask.setRepeating (this.scan.bind (this, ScanMediaIdleTimeThreshold), this.configureMap.scanPeriod * 1000);
+				}
 				this.isReady = true;
-			}).catch ((err) => {
-				Log.err (`Failed to read media records; err=${err}`);
+			};
+			init ().catch ((err) => {
+				Log.err (`Failed to read stored media records; err=${err}`);
 			});
 		});
 	}
@@ -137,10 +141,10 @@ class MediaServer extends ServerBase {
 	doConfigure () {
 		if (this.isRunning) {
 			if (this.configureMap.scanPeriod > 0) {
-				this.scanTask.setRepeating (this.scanTaskFn, this.configureMap.scanPeriod * 1000);
+				this.scanTask.setRepeating (this.scan.bind (this, ScanMediaIdleTimeThreshold), this.configureMap.scanPeriod * 1000);
 			}
 			else {
-				this.scanTask.setOnDemand (this.scanTaskFn);
+				this.scanTask.stop ();
 			}
 		}
 	}
@@ -154,7 +158,7 @@ class MediaServer extends ServerBase {
 
 	// Return a command invocation containing the server's status
 	doGetStatus () {
-		return (this.createCommand ("MediaServerStatus", {
+		return (App.systemAgent.createCommand (SystemInterface.CommandId.MediaServerStatus, {
 			isReady: this.isReady,
 			mediaCount: this.mediaCount,
 			mediaPath: MediaPath,
@@ -170,7 +174,9 @@ class MediaServer extends ServerBase {
 			{ "params.id": 1 },
 			{ "params.name": 1 },
 			{ "params.mtime": 1 },
-			{ "params.mediaPath": 1 }
+			{ "params.mediaPath": 1 },
+			{ "params.tags": 1 },
+			{ "params.sortKey": 1 }
 		];
 		const obj = { };
 		obj[`prefix.${SystemInterface.Constant.AgentIdPrefixField}`] = 1;
@@ -178,6 +184,41 @@ class MediaServer extends ServerBase {
 
 		for (const index of indexes) {
 			await App.systemAgent.recordStore.createIndex (index);
+		}
+	}
+
+	// Add the sortKey field to MediaItem records that don't have one
+	async addSortKeys () {
+		// TODO: Remove this method (when updates to legacy MediaItem records are no longer required)
+		try {
+			const crit = {
+				command: SystemInterface.CommandId.MediaItem,
+				"params.sortKey": {
+					"$exists": false
+				}
+			};
+			const count = await App.systemAgent.recordStore.countRecords (crit);
+			if (count <= 0) {
+				return;
+			}
+
+			const keymap = { };
+			await App.systemAgent.recordStore.findRecords ((record, callback) => {
+				keymap[record.params.id] = StringUtil.getMediaItemSortKey (record.params.name);
+				process.nextTick (callback);
+			}, crit);
+			for (const id in keymap) {
+				await App.systemAgent.recordStore.updateRecords ({
+					"params.id": id
+				}, {
+					"$set": {
+						"params.sortKey": keymap[id]
+					}
+				});
+			}
+		}
+		catch (err) {
+			Log.err (`Failed to update media sort keys; err=${err}`);
 		}
 	}
 
@@ -195,12 +236,7 @@ class MediaServer extends ServerBase {
 		const crit = {
 			command: SystemInterface.CommandId.MediaItem
 		};
-		if ((cmdInv.params.searchKey != "") && (cmdInv.params.searchKey != "*")) {
-			crit["params.name"] = {
-				"$regex": App.systemAgent.recordStore.getSearchKeyRegex (cmdInv.params.searchKey),
-				"$options": "i"
-			};
-		}
+		this.addFindCrits (crit, cmdInv.params.searchKey);
 
 		const sort = { };
 		switch (cmdInv.params.sortOrder) {
@@ -209,7 +245,7 @@ class MediaServer extends ServerBase {
 				break;
 			}
 			default: {
-				sort["params.name"] = 1;
+				sort["params.sortKey"] = 1;
 				break;
 			}
 		}
@@ -221,7 +257,7 @@ class MediaServer extends ServerBase {
 			resultOffset: cmdInv.params.resultOffset
 		};
 		findresult.setSize = await App.systemAgent.recordStore.countRecords (crit);
-		client.emit (SystemInterface.Constant.WebSocketEvent, this.createCommand ("FindMediaItemsResult", findresult));
+		client.emit (SystemInterface.Constant.WebSocketEvent, App.systemAgent.createCommand (SystemInterface.CommandId.FindMediaItemsResult, findresult));
 		if (findresult.setSize > 0) {
 			await App.systemAgent.recordStore.findRecords ((record, callback) => {
 				SystemInterface.populateDefaultFields (record.params, SystemInterface.Type[record.commandName]);
@@ -233,14 +269,23 @@ class MediaServer extends ServerBase {
 
 	// Execute a ScanMediaItems command
 	async scanMediaItems (cmdInv, request, response) {
-		this.scanTask.setNextRepeat (0);
-		App.systemAgent.writeCommandResponse (request, response, this.createCommand ("CommandResult", {
+		App.systemAgent.writeCommandResponse (request, response, App.systemAgent.createCommand (SystemInterface.CommandId.CommandResult, {
 			success: true
 		}));
+
+		this.scanTask.stop ();
+		this.scan ().catch ((err) => {
+			Log.err (`${this.name} scanMediaItems command failed; err=${err}`);
+		}).then (() => {
+			if (this.configureMap.scanPeriod > 0) {
+				this.scanTask.setRepeating (this.scan.bind (this, ScanMediaIdleTimeThreshold), this.configureMap.scanPeriod * 1000);
+				this.scanTask.setNextRepeat (this.configureMap.scanPeriod * 1000);
+			}
+		});
 	}
 
-	// Scan the server's media path to find new media files and execute tasks as needed to gather metadata
-	async scan () {
+	// Scan the server's media path to find new media files and execute tasks as needed to gather metadata. If mtimeIdleThreshold is provided, skip files with mtime values that are recent by that many milliseconds.
+	async scan (mtimeIdleThreshold) {
 		await App.systemAgent.recordStore.findRecords ((record, callback) => {
 			this.pruneMediaItem (record).catch ((err) => {
 				Log.debug (`${this.name} failed to verify media item; err=${err}`);
@@ -258,6 +303,10 @@ class MediaServer extends ServerBase {
 		for (const file of scanfiles) {
 			try {
 				const stats = await FsUtil.statFile (file);
+				if ((typeof mtimeIdleThreshold == "number") && ((stats.mtime.getTime () + mtimeIdleThreshold) > Date.now ())) {
+					continue;
+				}
+
 				const record = await App.systemAgent.recordStore.findRecord ({
 					command: SystemInterface.CommandId.MediaItem,
 					"params.mediaPath": file,
@@ -280,7 +329,7 @@ class MediaServer extends ServerBase {
 		if (taskconfigs.length > 0) {
 			const promises = [ ];
 			for (const config of taskconfigs) {
-				promises.push (App.systemAgent.runTask ("ScanMediaFile", config));
+				promises.push (App.systemAgent.runTask (new ScanMediaFileTask (config)));
 			}
 			await Promise.all (promises);
 		}
@@ -311,6 +360,7 @@ class MediaServer extends ServerBase {
 						"params.isCreateStreamAvailable": false
 					}
 				});
+				App.systemAgent.recordStore.expireCacheRecord (mediaItem.params.id);
 			}
 			return;
 		}
@@ -349,7 +399,7 @@ class MediaServer extends ServerBase {
 
 	// Execute a RemoveMedia command
 	async removeMedia (cmdInv, request, response) {
-		App.systemAgent.writeCommandResponse (request, response, this.createCommand ("CommandResult", {
+		App.systemAgent.writeCommandResponse (request, response, App.systemAgent.createCommand (SystemInterface.CommandId.CommandResult, {
 			success: true
 		}));
 		const item = await App.systemAgent.recordStore.findCommandRecord (SystemInterface.CommandId.MediaItem, cmdInv.params.id);
@@ -384,6 +434,88 @@ class MediaServer extends ServerBase {
 		}
 		const filepath = Path.join (this.configureMap.mediaPath, item.params.name);
 		App.systemAgent.writeFileResponse (request, response, filepath);
+	}
+
+	// Execute an AddMediaTag command
+	async addMediaTag (cmdInv, request, response) {
+		await App.systemAgent.recordStore.updateRecords ({
+			"params.id": cmdInv.params.mediaId
+		}, {
+			"$addToSet": {
+				"params.tags": cmdInv.params.tag
+			}
+		});
+		App.systemAgent.recordStore.expireCacheRecord (cmdInv.params.mediaId);
+		const record = await App.systemAgent.recordStore.findRecord ({
+			command: SystemInterface.CommandId.MediaItem,
+			"params.id": cmdInv.params.mediaId
+		});
+		if (record == null) {
+			App.systemAgent.writeCommandResponse (request, response, App.systemAgent.createCommand (SystemInterface.CommandId.CommandResult, {
+				success: false,
+				error: "Media record not found"
+			}));
+			return;
+		}
+		if (Array.isArray (record.params.tags)) {
+			await App.systemAgent.recordStore.updateRecords ({
+				command: SystemInterface.CommandId.StreamItem,
+				"params.sourceId": cmdInv.params.mediaId
+			}, {
+				"$set": {
+					"params.tags": record.params.tags
+				}
+			});
+		}
+		App.systemAgent.writeCommandResponse (request, response, App.systemAgent.createCommand (SystemInterface.CommandId.CommandResult, {
+			success: true,
+			item: record
+		}));
+	}
+
+	// Execute a RemoveMediaTag command
+	async removeMediaTag (cmdInv, request, response) {
+		const record = await App.systemAgent.recordStore.findRecord ({
+			command: SystemInterface.CommandId.MediaItem,
+			"params.id": cmdInv.params.mediaId
+		});
+		if (record == null) {
+			App.systemAgent.writeCommandResponse (request, response, App.systemAgent.createCommand (SystemInterface.CommandId.CommandResult, {
+				success: false,
+				error: "Media record not found"
+			}));
+			return;
+		}
+		if (Array.isArray (record.params.tags)) {
+			const key = cmdInv.params.tag.toLowerCase ();
+			const tags = record.params.tags.filter ((item) => {
+				return (item.toLowerCase () != key);
+			});
+			if (tags.length != record.params.tags.length) {
+				await App.systemAgent.recordStore.updateRecords ({
+					"params.id": cmdInv.params.mediaId
+				}, {
+					"$set": {
+						"params.tags": tags
+					}
+				});
+				record.params.tags = tags;
+				App.systemAgent.recordStore.expireCacheRecord (cmdInv.params.mediaId);
+
+				await App.systemAgent.recordStore.updateRecords ({
+					command: SystemInterface.CommandId.StreamItem,
+					"params.sourceId": cmdInv.params.mediaId
+				}, {
+					"$set": {
+						"params.tags": record.params.tags
+					}
+				});
+			}
+		}
+		App.systemAgent.writeCommandResponse (request, response, App.systemAgent.createCommand (SystemInterface.CommandId.CommandResult, {
+			success: true,
+			item: record
+		}));
 	}
 }
 module.exports = MediaServer;

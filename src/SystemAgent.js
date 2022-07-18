@@ -1,5 +1,5 @@
 /*
-* Copyright 2018-2021 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
+* Copyright 2018-2022 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are met:
@@ -38,6 +38,7 @@ const Path = require ("path");
 const Http = require ("http");
 const Https = require ("https");
 const Crypto = require ("crypto");
+const Zlib = require ("zlib");
 const EventEmitter = require ("events").EventEmitter;
 const Dgram = require ("dgram");
 const Uuid = require ("uuid");
@@ -45,16 +46,16 @@ const Async = require ("async");
 const Log = require (Path.join (App.SOURCE_DIRECTORY, "Log"));
 const FsUtil = require (Path.join (App.SOURCE_DIRECTORY, "FsUtil"));
 const StringUtil = require (Path.join (App.SOURCE_DIRECTORY, "StringUtil"));
+const OsUtil = require (Path.join (App.SOURCE_DIRECTORY, "OsUtil"));
 const Ipv4Address = require (Path.join (App.SOURCE_DIRECTORY, "Ipv4Address"));
 const Prng = require (Path.join (App.SOURCE_DIRECTORY, "Prng"));
-const Task = require (Path.join (App.SOURCE_DIRECTORY, "Task", "Task"));
 const TaskGroup = require (Path.join (App.SOURCE_DIRECTORY, "Task", "TaskGroup"));
 const RepeatTask = require (Path.join (App.SOURCE_DIRECTORY, "RepeatTask"));
-const AgentControl = require (Path.join (App.SOURCE_DIRECTORY, "AgentControl"));
 const SystemInterface = require (Path.join (App.SOURCE_DIRECTORY, "SystemInterface"));
 const RecordStore = require (Path.join (App.SOURCE_DIRECTORY, "RecordStore"));
 const AccessControl = require (Path.join (App.SOURCE_DIRECTORY, "AccessControl"));
 const ExecProcess = require (Path.join (App.SOURCE_DIRECTORY, "ExecProcess"));
+const WebRequest = require (Path.join (App.SOURCE_DIRECTORY, "WebRequest"));
 const Server = require (Path.join (App.SOURCE_DIRECTORY, "Server", "Server"));
 
 const AgentStatusEvent = "AgentStatus";
@@ -65,28 +66,27 @@ class SystemAgent {
 		this.isEnabled = true;
 		this.runStatePath = Path.join (App.DATA_DIRECTORY, "state");
 		this.agentId = "";
+		this.tcpPort1 = 0;
+		this.tcpPort2 = 0;
+		this.udpPort = 0;
 		this.prng = new Prng ();
 
 		this.emitter = new EventEmitter ();
 		this.emitter.setMaxListeners (0);
 
+		this.serverList = [ ];
 		this.displayName = "";
 		this.applicationName = "";
 		this.userAgent = "";
 		this.urlHostname = "";
 		this.memoryFilePath = "";
-
 		this.isStarted = false;
 		this.startTime = 0;
 		this.httpServer1 = null;
 		this.io = null;
-		this.httpServerPort1 = 0;
 		this.httpServer2 = null;
-		this.httpServerPort2 = 0;
-
 		this.isBroadcastReady = false;
 		this.datagramSocket = null;
-		this.datagramSocketPort = 0;
 
 		this.linkPath = App.LinkPath;
 		if (this.linkPath == "") {
@@ -137,9 +137,6 @@ class SystemAgent {
 		// A map of command ID values to functions for handling commands received by the link server
 		this.linkCommandHandlerMap = { };
 
-		// A list of Server objects
-		this.serverList = [ ];
-
 		// A map of configuration values persisted as local state in the agent's data path
 		this.runState = { };
 
@@ -148,8 +145,8 @@ class SystemAgent {
 
 		this.taskGroup = new TaskGroup ();
 		this.taskGroup.maxRunCount = App.MaxTaskCount;
-
-		this.agentControl = new AgentControl ();
+		this.backgroundTaskGroup = new TaskGroup ();
+		this.backgroundTaskGroup.maxRunCount = 1;
 
 		this.recordStore = new RecordStore ();
 
@@ -161,13 +158,18 @@ class SystemAgent {
 
 	// Start the agent's operation and invoke startCompleteCallback (err) when complete
 	start (startCompleteCallback) {
-		let serverconfigs;
+		this.startAgent ().then (() => {
+			startCompleteCallback ();
+		}).catch ((err) => {
+			startCompleteCallback (err);
+		});
+	}
 
+	// Start the agent's operation
+	async startAgent () {
 		if (this.isStarted) {
-			process.nextTick (startCompleteCallback);
 			return;
 		}
-
 		this.isEnabled = App.AgentEnabled;
 		this.applicationName = App.AgentApplicationName;
 		this.userAgent = `${this.applicationName}/${App.VERSION}_${App.AGENT_PLATFORM}`;
@@ -183,47 +185,29 @@ class SystemAgent {
 			}
 		}
 
-		serverconfigs = FsUtil.readConfigFile (Path.join (App.CONF_DIRECTORY, "server.conf"));
-		if (serverconfigs == null) {
-			serverconfigs = [ ];
-		}
-		if (serverconfigs.length <= 0) {
-			Log.notice ("No server types configured, remote functionality may be limited");
-		}
-
-		for (const config of serverconfigs) {
-			if (Server.ServerTypes[config.type] == null) {
-				process.nextTick (() => {
-					startCompleteCallback (`Unknown server type "${config.type}"`);
-				});
-				return;
+		const serverconfigs = FsUtil.readConfigFile (Path.join (App.CONF_DIRECTORY, "server.conf"));
+		if (Array.isArray (serverconfigs)) {
+			for (const config of serverconfigs) {
+				if (Server.ServerTypes[config.type] == null) {
+					throw Error (`Unknown server type "${config.type}"`);
+				}
+				const server = new Server.ServerTypes[config.type] ();
+				server.baseConfiguration = config.params;
+				this.serverList.push (server);
 			}
-
-			const server = new Server.ServerTypes[config.type] ();
-			server.baseConfiguration = config.params;
-			this.serverList.push (server);
 		}
 
 		this.startTime = Date.now ();
-
-		FsUtil.createDirectory (App.DATA_DIRECTORY).then (() => {
-			return (FsUtil.readStateFile (this.runStatePath));
-		}).then ((state) => {
-			if (state == null) {
-				this.agentId = Uuid.v4 ();
-				Log.debug (`Assign agent ID; id=${this.agentId}`);
-				this.runState.agentId = this.agentId;
-				return (FsUtil.writeStateFile (this.runStatePath, this.runState));
-			}
+		await FsUtil.createDirectory (App.DATA_DIRECTORY);
+		const state = await FsUtil.readStateFile (this.runStatePath);
+		if ((state == null) || (typeof state.agentId != "string")) {
+			this.agentId = Uuid.v4 ();
+			Log.debug (`Assign agent ID; id=${this.agentId}`);
+			this.runState.agentId = this.agentId;
+			await FsUtil.writeStateFile (this.runStatePath, this.runState);
+		}
+		else {
 			this.runState = state;
-
-			if (typeof this.runState.agentId != "string") {
-				this.agentId = Uuid.v4 ();
-				Log.debug (`Assign agent ID; id=${this.agentId}`);
-				this.runState.agentId = this.agentId;
-				return (FsUtil.writeStateFile (this.runStatePath, this.runState));
-			}
-
 			this.agentId = this.runState.agentId;
 			if (this.runState.agentConfiguration != null) {
 				if (typeof this.runState.agentConfiguration.isEnabled == "boolean") {
@@ -233,101 +217,92 @@ class SystemAgent {
 					this.displayName = this.runState.agentConfiguration.displayName;
 				}
 			}
-		}).then (() => {
-			return (this.generateTlsConfig ());
-		}).then (() => {
-			if (this.isEnabled) {
-				return (this.startAllServers ());
-			}
-		}).then (() => {
-			let digest, len;
+		}
 
-			if ((typeof this.runState.adminSecret == "string") && (this.runState.adminSecret != "")) {
-				digest = this.runState.adminSecret;
-				len = digest.length / 2;
-				if (len <= 0) {
-					App.AuthorizeSecret = digest;
-					this.setAuthInvokeRequestHandler (SystemInterface.Constant.DefaultAuthorizePath);
-				}
-				else {
-					App.AuthorizeSecret = digest.substring (0, len);
-					this.setAuthInvokeRequestHandler (digest.substring (len));
-				}
+		await this.generateTlsConfig ();
+		if (this.isEnabled) {
+			await this.startAllServers ();
+		}
+
+		if ((typeof this.runState.adminSecret == "string") && (this.runState.adminSecret != "")) {
+			const digest = this.runState.adminSecret;
+			const len = digest.length / 2;
+			if (len <= 0) {
+				App.AuthorizeSecret = digest;
+				this.setAuthInvokeRequestHandler (SystemInterface.Constant.DefaultAuthorizePath);
 			}
 			else {
-				this.setAuthInvokeRequestHandler (App.AuthorizePath);
+				App.AuthorizeSecret = digest.substring (0, len);
+				this.setAuthInvokeRequestHandler (digest.substring (len));
 			}
-		}).then (() => {
-			return (this.openMemoryFilePath ());
-		}).then (() => {
-			return (this.recordStore.start ());
-		}).then (() => {
-			return (this.agentControl.start ());
-		}).then (() => {
-			this.accessControl.start ();
-			this.taskGroup.start ();
+		}
+		else {
+			this.setAuthInvokeRequestHandler (App.AuthorizePath);
+		}
 
-			this.addInvokeRequestHandler (SystemInterface.Constant.DefaultInvokePath, "GetStatus", (cmdInv, request, response) => {
-				this.writeCommandResponse (request, response, this.getStatus ());
-			});
-			this.addInvokeRequestHandler (SystemInterface.Constant.DefaultInvokePath, "GetAgentConfiguration", (cmdInv, request, response) => {
-				this.writeCommandResponse (request, response, this.getConfiguration ());
-			});
-			this.addInvokeRequestHandler (SystemInterface.Constant.DefaultInvokePath, "UpdateAgentConfiguration", (cmdInv, request, response) => {
-				this.updateAgentConfiguration (cmdInv, request, response);
-			});
-			this.addInvokeRequestHandler (SystemInterface.Constant.DefaultInvokePath, "ShutdownAgent", (cmdInv, request, response) => {
-				this.shutdownAgent (cmdInv, request, response);
-			});
-			this.addInvokeRequestHandler (SystemInterface.Constant.DefaultInvokePath, "SetAdminSecret", (cmdInv, request, response) => {
-				this.setAdminSecret (cmdInv, request, response);
-			});
-			this.addInvokeRequestHandler (SystemInterface.Constant.DefaultInvokePath, "CancelTask", (cmdInv, request, response) => {
-				this.taskGroup.cancelTask (cmdInv);
-				this.writeCommandResponse (request, response, this.createCommand ("CommandResult", {
-					success: true
-				}));
-			});
+		await this.openMemoryFilePath ();
+		await this.recordStore.start ();
+		this.accessControl.start ();
+		this.taskGroup.start ();
+		this.backgroundTaskGroup.start ();
 
-			this.addLinkCommandHandler ("GetStatus", (cmdInv, client) => {
-				client.emit (SystemInterface.Constant.WebSocketEvent, this.getStatus ());
-			});
-			this.addLinkCommandHandler ("ReadTasks", (cmdInv, client) => {
-				this.taskGroup.readTasks (cmdInv, client);
-			});
-			this.addLinkCommandHandler ("WatchTasks", (cmdInv, client) => {
-				this.taskGroup.watchTasks (cmdInv, client);
-			});
-			this.addLinkCommandHandler ("WatchStatus", (cmdInv, client) => {
-				const execute = (agentStatus) => {
-					client.emit (SystemInterface.Constant.WebSocketEvent, agentStatus);
-				};
+		this.addInvokeRequestHandler (SystemInterface.Constant.DefaultInvokePath, SystemInterface.CommandId.GetStatus, (cmdInv, request, response) => {
+			this.writeCommandResponse (request, response, this.getStatus ());
+		});
+		this.addInvokeRequestHandler (SystemInterface.Constant.DefaultInvokePath, SystemInterface.CommandId.GetAgentConfiguration, (cmdInv, request, response) => {
+			this.writeCommandResponse (request, response, this.getConfiguration ());
+		});
+		this.addInvokeRequestHandler (SystemInterface.Constant.DefaultInvokePath, SystemInterface.CommandId.UpdateAgentConfiguration, (cmdInv, request, response) => {
+			this.updateAgentConfiguration (cmdInv, request, response);
+		});
+		this.addInvokeRequestHandler (SystemInterface.Constant.DefaultInvokePath, SystemInterface.CommandId.ShutdownAgent, (cmdInv, request, response) => {
+			this.shutdownAgent (cmdInv, request, response);
+		});
+		this.addInvokeRequestHandler (SystemInterface.Constant.DefaultInvokePath, SystemInterface.CommandId.SetAdminSecret, (cmdInv, request, response) => {
+			this.setAdminSecret (cmdInv, request, response);
+		});
+		this.addInvokeRequestHandler (SystemInterface.Constant.DefaultInvokePath, SystemInterface.CommandId.CancelTask, (cmdInv, request, response) => {
+			this.taskGroup.cancelTask (cmdInv);
+			this.writeCommandResponse (request, response, this.createCommand (SystemInterface.CommandId.CommandResult, {
+				success: true
+			}));
+		});
 
-				this.agentStatusEventEmitter.addListener (AgentStatusEvent, execute);
-				client.once ("disconnect", () => {
-					this.agentStatusEventEmitter.removeListener (AgentStatusEvent, execute);
-					if (this.agentStatusEventEmitter.listenerCount (AgentStatusEvent) <= 0) {
-						this.agentStatusTask.stop ();
-					}
-				});
+		this.addLinkCommandHandler (SystemInterface.CommandId.GetStatus, (cmdInv, client) => {
+			client.emit (SystemInterface.Constant.WebSocketEvent, this.getStatus ());
+		});
+		this.addLinkCommandHandler (SystemInterface.CommandId.ReadTasks, (cmdInv, client) => {
+			this.taskGroup.readTasks (cmdInv, client);
+		});
+		this.addLinkCommandHandler (SystemInterface.CommandId.WatchTasks, (cmdInv, client) => {
+			this.taskGroup.watchTasks (cmdInv, client);
+		});
+		this.addLinkCommandHandler (SystemInterface.CommandId.WatchStatus, (cmdInv, client) => {
+			const execute = (agentStatus) => {
+				client.emit (SystemInterface.Constant.WebSocketEvent, agentStatus);
+			};
 
-				if (! this.agentStatusTask.isRepeating) {
-					this.lastAgentStatus = null;
-					this.agentStatusTask.setRepeating ((callback) => {
-						this.emitAgentStatus (callback);
-					}, App.HeartbeatPeriod * 5, App.HeartbeatPeriod * 6);
+			this.agentStatusEventEmitter.addListener (AgentStatusEvent, execute);
+			client.once ("disconnect", () => {
+				this.agentStatusEventEmitter.removeListener (AgentStatusEvent, execute);
+				if (this.agentStatusEventEmitter.listenerCount (AgentStatusEvent) <= 0) {
+					this.agentStatusTask.stop ();
 				}
 			});
 
-			this.updateNetworkTask.setRepeating ((callback) => {
-				this.updateNetwork (callback);
-			}, App.HeartbeatPeriod * 8, App.HeartbeatPeriod * 16);
-
-			this.isStarted = true;
-			startCompleteCallback ();
-		}).catch ((err) => {
-			startCompleteCallback (err);
+			if (! this.agentStatusTask.isRepeating) {
+				this.lastAgentStatus = null;
+				this.agentStatusTask.setRepeating ((callback) => {
+					this.emitAgentStatus (callback);
+				}, App.HeartbeatPeriod * 5, App.HeartbeatPeriod * 6);
+			}
 		});
+
+		this.updateNetworkTask.setRepeating ((callback) => {
+			this.updateNetwork (callback);
+		}, App.HeartbeatPeriod * 8, App.HeartbeatPeriod * 16);
+
+		this.isStarted = true;
 	}
 
 	// Generate TLS configuration files if needed
@@ -346,20 +321,12 @@ class SystemAgent {
 			Log.debug (`Generate TLS config (failed to stat files); err=${err}`);
 		}
 
-		const runOpenssl = (args) => {
-			return (new Promise ((resolve, reject) => {
-				App.systemAgent.createOpensslProcess (args, App.DATA_DIRECTORY, null, (err, isExitSuccess) => {
-					if (err != null) {
-						reject (err);
-						return;
-					}
-					if (! isExitSuccess) {
-						reject (Error ("Failed to generate TLS configuration; err=openssl process ended with error"));
-						return;
-					}
-					resolve ();
-				});
-			}));
+		const runOpenssl = async (args) => {
+			const proc = App.systemAgent.createOpensslProcess (args, App.DATA_DIRECTORY);
+			const isExitSuccess = await proc.awaitEnd ();
+			if (! isExitSuccess) {
+				throw Error ("openssl process ended with error");
+			}
 		};
 
 		await runOpenssl ([
@@ -389,10 +356,10 @@ class SystemAgent {
 	// Execute a request to check for application news from membranesoftware.com
 	getApplicationNews () {
 		const url = `${App.ApplicationNewsUrl}${App.VERSION}_${App.AGENT_PLATFORM}_${(App.Language != "") ? App.Language : "en"}`;
-		this.fetchUrlData (url).then ((urlData) => {
+		new WebRequest (url).get ().then ((responseData) => {
 			let msg;
 
-			const cmdinv = SystemInterface.parseCommand (urlData);
+			const cmdinv = SystemInterface.parseCommand (responseData);
 			if (SystemInterface.isError (cmdinv) || (cmdinv.command != SystemInterface.CommandId.ApplicationNews)) {
 				throw Error ("Received non-parsing response data");
 			}
@@ -420,7 +387,6 @@ class SystemAgent {
 				resolve ();
 				return;
 			}
-
 			options = { };
 			if (App.EnableHttps) {
 				try {
@@ -430,7 +396,7 @@ class SystemAgent {
 					};
 				}
 				catch (e) {
-					reject (Error (e));
+					reject (e);
 					return;
 				}
 			}
@@ -451,16 +417,13 @@ class SystemAgent {
 				http.on ("error", listenError);
 				http.listen (App.TcpPort1, null, 1024, listenComplete);
 			}, 0);
-
 			const listenError = (err) => {
 				http.removeListener ("error", listenError);
-				reject (Error (err));
+				reject (err);
 			};
-
 			const runError = (err) => {
 				Log.err (`HTTP-1 error; err=${err}`);
 			};
-
 			const listenComplete = () => {
 				http.removeListener ("error", listenError);
 				const address = http.address ();
@@ -468,15 +431,17 @@ class SystemAgent {
 					reject (Error ("Internal error: failed to read listen port from HTTP server"));
 					return;
 				}
-
-				this.httpServerPort1 = address.port;
+				this.tcpPort1 = address.port;
+				if (App.ExtTcpPort1 > 0) {
+					this.tcpPort1 = App.ExtTcpPort1;
+				}
 				this.resetUrlHostname ();
-				Log.debug (`HTTP-1 listening; address=${this.urlHostname}:${this.httpServerPort1}`);
-				if (this.httpServerPort1 == SystemInterface.Constant.DefaultTcpPort1) {
+				Log.debug (`HTTP-1 listening; address=${this.urlHostname}:${this.tcpPort1}`);
+				if (this.tcpPort1 == SystemInterface.Constant.DefaultTcpPort1) {
 					Log.info (`Server address: ${this.urlHostname}`);
 				}
 				else {
-					Log.info (`Server address: ${this.urlHostname}:${this.httpServerPort1}`);
+					Log.info (`Server address: ${this.urlHostname}:${this.tcpPort1}`);
 				}
 
 				const io = require ("socket.io") (http, {
@@ -493,10 +458,8 @@ class SystemAgent {
 						this.httpServer1 = null;
 					}
 				});
-
 				resolve ();
 			};
-
 			const ioConnection = (client) => {
 				let token;
 
@@ -529,10 +492,10 @@ class SystemAgent {
 							token = respcmd.params.token;
 							this.accessControl.setSessionSustained (token, true);
 							client.emit (SystemInterface.Constant.WebSocketEvent, respcmd);
-							client.emit (SystemInterface.Constant.WebSocketEvent, this.createCommand ("LinkSuccess"));
+							client.emit (SystemInterface.Constant.WebSocketEvent, this.createCommand (SystemInterface.CommandId.LinkSuccess));
 						}
 						else {
-							client.emit (SystemInterface.Constant.WebSocketEvent, this.createCommand ("AuthorizationRequired"));
+							client.emit (SystemInterface.Constant.WebSocketEvent, this.createCommand (SystemInterface.CommandId.AuthorizationRequired));
 						}
 						return;
 					}
@@ -551,10 +514,10 @@ class SystemAgent {
 				});
 
 				if (App.AuthorizeSecret != "") {
-					client.emit (SystemInterface.Constant.WebSocketEvent, this.createCommand ("AuthorizationRequired"));
+					client.emit (SystemInterface.Constant.WebSocketEvent, this.createCommand (SystemInterface.CommandId.AuthorizationRequired));
 				}
 				else {
-					client.emit (SystemInterface.Constant.WebSocketEvent, this.createCommand ("LinkSuccess"));
+					client.emit (SystemInterface.Constant.WebSocketEvent, this.createCommand (SystemInterface.CommandId.LinkSuccess));
 				}
 			};
 		}));
@@ -568,7 +531,6 @@ class SystemAgent {
 				resolve ();
 				return;
 			}
-
 			http.close ((err) => {
 				if (err) {
 					Log.debug (`HTTP-1 close error; err=${err}`);
@@ -606,16 +568,13 @@ class SystemAgent {
 				http.on ("error", listenError);
 				http.listen (App.TcpPort2, null, 1024, listenComplete);
 			}, 0);
-
 			const listenError = (err) => {
 				http.removeListener ("error", listenError);
-				reject (Error (err));
+				reject (err);
 			};
-
 			const runError = (err) => {
 				Log.err (`HTTP-2 error; err=${err}`);
 			};
-
 			const listenComplete = () => {
 				http.removeListener ("error", listenError);
 				const address = http.address ();
@@ -623,9 +582,11 @@ class SystemAgent {
 					reject (Error ("Internal error: failed to read listen port from HTTP server"));
 					return;
 				}
-
-				this.httpServerPort2 = address.port;
-				Log.debug (`HTTP-2 listening; address=${this.urlHostname}:${this.httpServerPort2}`);
+				this.tcpPort2 = address.port;
+				if (App.ExtTcpPort2 > 0) {
+					this.tcpPort2 = App.ExtTcpPort2;
+				}
+				Log.debug (`HTTP-2 listening; address=${this.urlHostname}:${this.tcpPort2}`);
 				http.on ("error", runError);
 				http.once ("close", () => {
 					http.removeListener ("error", runError);
@@ -633,7 +594,6 @@ class SystemAgent {
 						this.httpServer2 = null;
 					}
 				});
-
 				resolve ();
 			};
 		}));
@@ -647,7 +607,6 @@ class SystemAgent {
 				resolve ();
 				return;
 			}
-
 			http.close ((err) => {
 				if (err) {
 					Log.debug (`HTTP-2 close error; err=${err}`);
@@ -667,19 +626,16 @@ class SystemAgent {
 				resolve ();
 				return;
 			}
-
 			this.isBroadcastReady = false;
 			const socket = Dgram.createSocket ("udp4");
 
 			const listenError = (err) => {
 				socket.removeListener ("error", listenError);
-				reject (Error (err));
+				reject (err);
 			};
-
 			const runError = (err) => {
 				Log.err (`Datagram socket error; err=${err}`);
 			};
-
 			socket.on ("error", listenError);
 			socket.once ("listening", () => {
 				let port;
@@ -689,7 +645,7 @@ class SystemAgent {
 					socket.setBroadcast (true);
 				}
 				catch (err) {
-					reject (Error (err));
+					reject (err);
 					return;
 				}
 				const address = socket.address ();
@@ -709,17 +665,18 @@ class SystemAgent {
 						this.datagramSocket = null;
 					}
 				});
-
 				socket.on ("message", (msg, rinfo) => {
 					this.handleDatagramMessage (msg);
 				});
-
 				this.datagramSocket = socket;
-				this.datagramSocketPort = port;
+
+				this.udpPort = port;
+				if (App.ExtUdpPort > 0) {
+					this.udpPort = App.ExtUdpPort;
+				}
 				this.isBroadcastReady = true;
 				resolve ();
 			});
-
 			socket.bind (App.UdpPort);
 		}));
 	}
@@ -732,10 +689,9 @@ class SystemAgent {
 				resolve ();
 				return;
 			}
-
 			socket.close ((err) => {
 				if (err) {
-					reject (Error (err));
+					reject (err);
 					return;
 				}
 				if (socket == this.datagramSocket) {
@@ -758,7 +714,6 @@ class SystemAgent {
 				});
 				return;
 			}
-
 			for (const server of this.serverList) {
 				if (server.isRunning) {
 					process.nextTick (() => {
@@ -804,7 +759,7 @@ class SystemAgent {
 			return (new Promise ((resolve, reject) => {
 				execute ((err) => {
 					if (err != null) {
-						reject (Error (err));
+						reject (err);
 						return;
 					}
 					resolve ();
@@ -815,26 +770,30 @@ class SystemAgent {
 
 	// Stop the agent's operation and invoke stopCallback when complete
 	stop (stopCallback) {
-		this.updateNetworkTask.stop ();
-		this.agentStatusTask.stop ();
-		this.accessControl.stop ();
-		this.taskGroup.stop ();
-
-		this.closeDatagramSocket ().then (() => {
-			return (this.closeMainHttpServer ());
-		}).then (() => {
-			return (this.closeSecondaryHttpServer ());
-		}).then (() => {
-			return (this.stopAllServers ());
-		}).then (() => {
-			return (this.agentControl.stop ());
-		}).then (() => {
-			return (this.recordStore.stop ());
-		}).catch ((err) => {
-			Log.debug (`Error stopping servers; err=${err}`);
-		}).then (() => {
+		this.stopAgent ().then (() => {
 			stopCallback ();
+		}).catch ((err) => {
+			stopCallback (err);
 		});
+	}
+
+	// Stop the agent's operation
+	async stopAgent () {
+		try {
+			this.updateNetworkTask.stop ();
+			this.agentStatusTask.stop ();
+			this.accessControl.stop ();
+			this.taskGroup.stop ();
+			this.backgroundTaskGroup.stop ();
+			await this.closeDatagramSocket ();
+			await this.closeMainHttpServer ();
+			await this.closeSecondaryHttpServer ();
+			await this.stopAllServers ();
+			await this.recordStore.stop ();
+		}
+		catch (err) {
+			Log.debug (`Error stopping servers; err=${err}`);
+		}
 	}
 
 	// Stop all servers and invoke endCallback when complete. If endCallback is not provided, instead return a promise that executes the operation.
@@ -847,7 +806,6 @@ class SystemAgent {
 					executeCallback ();
 					return;
 				}
-
 				this.serverList[serverindex].stop (stopComplete);
 			};
 
@@ -867,7 +825,7 @@ class SystemAgent {
 			return (new Promise ((resolve, reject) => {
 				execute ((err) => {
 					if (err != null) {
-						reject (Error (err));
+						reject (err);
 						return;
 					}
 					resolve ();
@@ -891,7 +849,7 @@ class SystemAgent {
 			}
 		}
 		if (err) {
-			this.writeCommandResponse (request, response, this.createCommand ("CommandResult", {
+			this.writeCommandResponse (request, response, this.createCommand (SystemInterface.CommandId.CommandResult, {
 				success: false,
 				error: "Invalid configuration parameters"
 			}));
@@ -939,7 +897,7 @@ class SystemAgent {
 		this.stopAllServers (() => {
 			process.exit (0);
 		});
-		this.writeCommandResponse (request, response, this.createCommand ("CommandResult", {
+		this.writeCommandResponse (request, response, this.createCommand (SystemInterface.CommandId.CommandResult, {
 			success: true
 		}));
 	}
@@ -968,9 +926,11 @@ class SystemAgent {
 				App.AuthorizeSecret = digest.substring (0, len);
 				this.setAuthInvokeRequestHandler (digest.substring (len));
 			}
-			this.updateRunState ({ adminSecret: digest });
+			this.updateRunState ({
+				adminSecret: digest
+			});
 		}
-		this.writeCommandResponse (request, response, this.createCommand ("CommandResult", {
+		this.writeCommandResponse (request, response, this.createCommand (SystemInterface.CommandId.CommandResult, {
 			success: true
 		}));
 	}
@@ -983,7 +943,6 @@ class SystemAgent {
 			this.urlHostname = App.UrlHostname;
 			return;
 		}
-
 		urlhostname = "";
 		const interfaces = Os.networkInterfaces ();
 		for (const i in interfaces) {
@@ -1028,18 +987,10 @@ class SystemAgent {
 	}
 
 	// Add a new task to the agent's run queue. If endCallback is provided, invoke endCallback (err, task.resultObject) when the task completes. Otherwise, return a promise that runs the task.
-	runTask (typeName, configureParams, endCallback) {
+	runTask (task, endCallback) {
 		const execute = (executeCallback) => {
-			let task;
-
-			try {
-				task = Task.createTask (typeName, configureParams);
-			}
-			catch (err) {
-				executeCallback (err);
-				return;
-			}
-			this.taskGroup.runTask (task, (task) => {
+			this.taskGroup.run (task);
+			this.taskGroup.onTaskEnd (task.id, () => {
 				if (! task.isSuccess) {
 					executeCallback (Error (`Task ${task.toString ()} failed execution`), null);
 					return;
@@ -1062,6 +1013,12 @@ class SystemAgent {
 				});
 			}));
 		}
+	}
+
+	// Execute task as a background job and return the task object when complete
+	async runBackgroundTask (task) {
+		await this.backgroundTaskGroup.awaitRun (task);
+		return (task);
 	}
 
 	// Handle a request received by the main HTTP server
@@ -1125,6 +1082,15 @@ class SystemAgent {
 				return;
 			}
 
+			if (/^[/0-9a-zA-Z+]/.test (cmdData)) {
+				try {
+					const decoded = Zlib.inflateSync (Buffer.from (cmdData, "base64")).toString ();
+					cmdData = decoded;
+				}
+				catch (err) {
+					cmdData = "";
+				}
+			}
 			const cmdinv = SystemInterface.parseCommand (cmdData);
 			if (SystemInterface.isError (cmdinv)) {
 				this.writeResponse (request, response, 404);
@@ -1186,6 +1152,15 @@ class SystemAgent {
 		const execute = (cmdData) => {
 			let webrootname, filepath, contenttype;
 
+			if (/^[/0-9a-zA-Z+]/.test (cmdData)) {
+				try {
+					const decoded = Zlib.inflateSync (Buffer.from (cmdData, "base64")).toString ();
+					cmdData = decoded;
+				}
+				catch (err) {
+					cmdData = "";
+				}
+			}
 			const cmdinv = SystemInterface.parseCommand (cmdData);
 			if (! SystemInterface.isError (cmdinv)) {
 				const fn = this.secondaryInvokeRequestHandlerMap[`${cmdinv.command}:${path}`];
@@ -1270,27 +1245,27 @@ class SystemAgent {
 		if (responseData === undefined) {
 			switch (responseCode) {
 				case 200: {
-					responseData = "OK";
+					responseData = "OK\r\n";
 					break;
 				}
 				case 400: {
-					responseData = "Bad request";
+					responseData = "Bad request\r\n";
 					break;
 				}
 				case 401: {
-					responseData = "Unauthorized";
+					responseData = "Unauthorized\r\n";
 					break;
 				}
 				case 404: {
-					responseData = "Not found";
+					responseData = "Not found\r\n";
 					break;
 				}
 				case 405: {
-					responseData = "Method not allowed";
+					responseData = "Method not allowed\r\n";
 					break;
 				}
 				case 500: {
-					responseData = "Internal server error";
+					responseData = "Internal server error\r\n";
 					break;
 				}
 				default: {
@@ -1328,7 +1303,6 @@ class SystemAgent {
 			this.writeResponse (request, response, 500);
 			return;
 		}
-
 		response.setHeader ("Content-Type", "application/json");
 		this.writeResponse (request, response, 200, cmdInv);
 	}
@@ -1343,7 +1317,6 @@ class SystemAgent {
 				this.writeResponse (request, response, 404);
 				return;
 			}
-
 			if (! stats.isFile ()) {
 				Log.debug (`Error reading HTTP response file; url=${request.url} path=${filePath} err=Not a regular file`);
 				this.writeResponse (request, response, 404);
@@ -1363,7 +1336,6 @@ class SystemAgent {
 				if (isopen) {
 					return;
 				}
-
 				isopen = true;
 				response.statusCode = 200;
 				if ((typeof contentType == "string") && (contentType != "")) {
@@ -1394,46 +1366,46 @@ class SystemAgent {
 		if (this.authorizePath.indexOf ("/") != 0) {
 			this.authorizePath = `/${this.authorizePath}`;
 		}
-		this.addInvokeRequestHandler (this.authorizePath, "Authorize", (cmdInv, request, response) => {
+		this.addInvokeRequestHandler (this.authorizePath, SystemInterface.CommandId.Authorize, (cmdInv, request, response) => {
 			this.writeCommandResponse (request, response, this.accessControl.authorize (cmdInv));
 		});
 	}
 
 	// Set a main server invocation handler for the specified path and command name. When a matching request is received, invoke handler (cmdInv, request, response).
 	addInvokeRequestHandler (path, commandName, handler) {
-		const cmd = SystemInterface.Command[commandName];
-		if (cmd == null) {
+		const cmdid = SystemInterface.getCommandId (commandName);
+		if (cmdid < 0) {
 			throw Error (`Failed to add invoke request handler, unknown commandName ${commandName}`);
 		}
-		this.invokeRequestHandlerMap[`${cmd.id}:${path}`] = handler;
+		this.invokeRequestHandlerMap[`${cmdid}:${path}`] = handler;
 	}
 
 	// Remove a previously added invocation handler
 	removeInvokeRequestHandler (path, commandName) {
-		const cmd = SystemInterface.Command[commandName];
-		if (cmd == null) {
+		const cmdid = SystemInterface.getCommandId (commandName);
+		if (cmdid < 0) {
 			return;
 		}
-		delete (this.invokeRequestHandlerMap[`${cmd.id}:${path}`]);
+		delete (this.invokeRequestHandlerMap[`${cmdid}:${path}`]);
 	}
 
 	// Set a secondary server invocation handler for the specified path and command name. When a matching request is received, invoke handler (cmdInv, request, response).
 	addSecondaryInvokeRequestHandler (path, commandName, handler) {
-		const cmd = SystemInterface.Command[commandName];
-		if (cmd == null) {
+		const cmdid = SystemInterface.getCommandId (commandName);
+		if (cmdid < 0) {
 			throw Error (`Failed to add secondary invoke request handler, unknown commandName ${commandName}`);
 		}
-		this.secondaryInvokeRequestHandlerMap[`${cmd.id}:${path}`] = handler;
+		this.secondaryInvokeRequestHandlerMap[`${cmdid}:${path}`] = handler;
 		this.shouldResetNetworkServers = true;
 	}
 
 	// Remove a previously added invocation handler
 	removeSecondaryInvokeRequestHandler (path, commandName) {
-		const cmd = SystemInterface.Command[commandName];
-		if (cmd == null) {
+		const cmdid = SystemInterface.getCommandId (commandName);
+		if (cmdid < 0) {
 			return;
 		}
-		delete (this.secondaryInvokeRequestHandlerMap[`${cmd.id}:${path}`]);
+		delete (this.secondaryInvokeRequestHandlerMap[`${cmdid}:${path}`]);
 	}
 
 	// Set a request handler for the specified path. If a request with this path is received on the secondary HTTP server, invoke handler (request, response).
@@ -1470,70 +1442,46 @@ class SystemAgent {
 
 	// Set a handler for link commands of the specified name. If a matching request is received, the handler function is invoked with parameters (cmdInv, client).
 	addLinkCommandHandler (commandName, handler) {
-		const cmd = SystemInterface.Command[commandName];
-		if (cmd == null) {
+		const cmdid = SystemInterface.getCommandId (commandName);
+		if (cmdid < 0) {
 			throw Error (`Failed to add link command handler, unknown commandName ${commandName}`);
 		}
-		this.linkCommandHandlerMap[cmd.id] = handler;
+		this.linkCommandHandlerMap[cmdid] = handler;
 	}
 
 	// Remove any previously configured handler for link commands of the specified name
 	removeLinkCommandHandler (commandName) {
-		const cmd = SystemInterface.Command[commandName];
-		if (cmd == null) {
+		const cmdid = SystemInterface.getCommandId (commandName);
+		if (cmdid < 0) {
 			return;
 		}
-		delete (this.linkCommandHandlerMap[cmd.id]);
+		delete (this.linkCommandHandlerMap[cmdid]);
 	}
 
-	// Return a promise that checks for an available memory filesystem and assigns the memoryFilePath data member to a non-empty value if successful
-	openMemoryFilePath () {
-		return (new Promise ((resolve, reject) => {
-			let path;
+	// Check for an available memory filesystem and assign the memoryFilePath data member to a non-empty value if successful
+	async openMemoryFilePath () {
+		let path;
 
-			if (! App.IsLinux) {
-				this.memoryFilePath = "";
-				resolve ();
-				return;
+		if (! OsUtil.isLinux) {
+			this.memoryFilePath = "";
+			return;
+		}
+		try {
+			// User-specific tmpfs directory, available on Raspios and other Linux systems
+			path = Path.join (Path.sep, "run", "user", `${process.getuid ()}`);
+			const stats = await FsUtil.statFile (path);
+			if (! stats.isDirectory ()) {
+				throw Error (`${path} is not a directory`);
 			}
-
-			setTimeout (() => {
-				// User-specific tmpfs directory, available on Raspbian and other Linux systems
-				path = Path.join (Path.sep, "run", "user", `${process.getuid ()}`);
-				Fs.stat (path, statComplete);
-			}, 0);
-			const statComplete = (err, stats) => {
-				if (err != null) {
-					Log.debug (`Memory file system not available; err=${err}`);
-					this.memoryFilePath = "";
-					resolve ();
-					return;
-				}
-
-				if (! stats.isDirectory ()) {
-					Log.debug (`Memory file system not available; err=${path} is not a directory`);
-					this.memoryFilePath = "";
-					resolve ();
-					return;
-				}
-
-				path = Path.join (path, "membrane-server");
-				FsUtil.createDirectory (path, createDirectoryComplete);
-			};
-
-			const createDirectoryComplete = (err) => {
-				if (err != null) {
-					Log.debug (`Memory file system not available; err=${err}`);
-					this.memoryFilePath = "";
-					resolve ();
-					return;
-				}
-
-				this.memoryFilePath = path;
-				Log.debug (`Memory file system open; path=${path}`);
-				resolve ();
-			};
-		}));
+			path = Path.join (path, "membrane-server");
+			await FsUtil.createDirectory (path);
+			this.memoryFilePath = path;
+			Log.debug (`Memory file system open; path=${path}`);
+		}
+		catch (err) {
+			Log.debug (`Memory file system not available; err=${err}`);
+			this.memoryFilePath = "";
+		}
 	}
 
 	// Copy fields from the provided object into the agent's run state and execute a write operation to persist the change. If endCallback is provided, invoke it when the write operation completes.
@@ -1541,7 +1489,6 @@ class SystemAgent {
 		for (const i in fields) {
 			this.runState[i] = fields[i];
 		}
-
 		if (typeof endCallback != "function") {
 			endCallback = () => { };
 		}
@@ -1647,7 +1594,6 @@ class SystemAgent {
 		if (SystemInterface.isError (cmd)) {
 			return;
 		}
-
 		switch (cmd.command) {
 			case SystemInterface.CommandId.ReportStatus: {
 				let statuscmd;
@@ -1716,7 +1662,6 @@ class SystemAgent {
 		if (! this.isBroadcastReady) {
 			return (false);
 		}
-
 		if (typeof message == "string") {
 			message = Buffer.from (message);
 		}
@@ -1768,9 +1713,9 @@ class SystemAgent {
 			displayName: this.displayName,
 			applicationName: this.applicationName,
 			urlHostname: this.urlHostname,
-			tcpPort1: this.httpServerPort1,
-			tcpPort2: this.httpServerPort2,
-			udpPort: this.datagramSocketPort,
+			tcpPort1: this.tcpPort1,
+			tcpPort2: this.tcpPort2,
+			udpPort: this.udpPort,
 			linkPath: this.linkPath,
 			uptime: StringUtil.getDurationString (now - this.startTime),
 			startTime: this.startTime,
@@ -1792,7 +1737,7 @@ class SystemAgent {
 			server.setStatus (params);
 		}
 
-		const cmd = SystemInterface.createCommand (this.getCommandPrefix (), "AgentStatus", params);
+		const cmd = SystemInterface.createCommand (this.getCommandPrefix (), SystemInterface.CommandId.AgentStatus, params);
 		if (SystemInterface.isError (cmd)) {
 			Log.err (`Failed to create agent status command; err=${cmd}`);
 			return (null);
@@ -1808,8 +1753,7 @@ class SystemAgent {
 		}
 		params.isEnabled = this.isEnabled;
 		params.displayName = this.displayName;
-
-		return (this.createCommand ("AgentConfiguration", params));
+		return (this.createCommand (SystemInterface.CommandId.AgentConfiguration, params));
 	}
 
 	// Return an AgentContact command that reflects current state, or null if the contact command could not be created. The generated command uses a default prefix with empty fields to yield a shorter message.
@@ -1817,14 +1761,13 @@ class SystemAgent {
 		const params = {
 			id: this.agentId,
 			urlHostname: this.urlHostname,
-			tcpPort1: this.httpServerPort1,
-			tcpPort2: this.httpServerPort2,
-			udpPort: this.datagramSocketPort,
+			tcpPort1: this.tcpPort1,
+			tcpPort2: this.tcpPort2,
+			udpPort: this.udpPort,
 			version: App.VERSION,
 			nodeVersion: process.version
 		};
-
-		return (this.createCommand ("AgentContact", params));
+		return (this.createCommand (SystemInterface.CommandId.AgentContact, params));
 	}
 
 	// Return the command type assigned to the specified UUID value, or -1 if no command type was found
@@ -1833,12 +1776,10 @@ class SystemAgent {
 		if (matches == null) {
 			return (-1);
 		}
-
 		const cmd = parseInt (matches[1], 16);
 		if (isNaN (cmd)) {
 			return (-1);
 		}
-
 		return (cmd);
 	}
 
@@ -1898,7 +1839,6 @@ class SystemAgent {
 		if ((typeof authorizeSecret == "string") && (authorizeSecret != "")) {
 			this.setCommandAuthorization (cmd, authorizeSecret, authorizeToken);
 		}
-
 		return (cmd);
 	}
 
@@ -1908,7 +1848,6 @@ class SystemAgent {
 		if (fn == null) {
 			return (Promise.reject (Error ("Path not found")));
 		}
-
 		return (new Promise ((resolve, reject) => {
 			let responsedata;
 
@@ -1945,285 +1884,8 @@ class SystemAgent {
 				}
 				resolve (responsecmd);
 			};
-
 			fn (cmdInv, request, response);
 		}));
-	}
-
-	// Execute an HTTP GET operation for the provided URL and save response data into the specified path. Invokes endCallback (err, destFilename) when complete. If endCallback is not provided, instead return a Promise that executes the operation.
-	fetchUrlFile (targetUrl, targetDirectory, targetFilename, endCallback) {
-		const execute = (executeCallback) => {
-			let url, httpreq, httpres, stream, tempfilename, destfilename;
-
-			url = targetUrl;
-			if (typeof url == "string") {
-				url = StringUtil.parseUrl (url);
-				if (url == null) {
-					executeCallback (`Invalid URL, ${targetUrl}`, null);
-					return;
-				}
-			}
-
-			destfilename = null;
-			Log.debug2 (`fetchUrlFile; targetUrl=${targetUrl} targetDirectory=${targetDirectory} targetFilename=${targetFilename}`);
-			Fs.stat (targetDirectory, (err, stats) => {
-				if (err != null) {
-					executeCallback (err, null);
-					return;
-				}
-				if (! stats.isDirectory ()) {
-					executeCallback (`${targetDirectory} exists but is not a directory`, null);
-					return;
-				}
-				assignTempFilePath ();
-			});
-
-			const assignTempFilePath = () => {
-				tempfilename = Path.join (targetDirectory, `urldata_${Date.now ()}_${App.systemAgent.getRandomString (16)}`);
-				Fs.stat (tempfilename, statTempFilePathComplete);
-			};
-
-			const statTempFilePathComplete = (err, stats) => {
-				if ((err != null) && (err.code != "ENOENT")) {
-					executeCallback (err, null);
-					return;
-				}
-
-				if (stats != null) {
-					assignTempFilePath ();
-					return;
-				}
-
-				stream = Fs.createWriteStream (tempfilename);
-				stream.on ("open", fileOpened);
-				stream.once ("error", fileError);
-			};
-
-			const fileError = (err) => {
-				stream.close ();
-				endRequest (err);
-			};
-
-			const fileOpened = () => {
-				const options = {
-					hostname: url.hostname,
-					port: url.port,
-					path: url.pathname,
-					method: "GET",
-					headers: {
-						"User-Agent": App.systemAgent.userAgent
-					}
-				};
-				if (url.search != "") {
-					options.path = `${options.path}${url.search}`;
-				}
-				try {
-					httpreq = Http.get (options, requestStarted);
-				}
-				catch (e) {
-					endRequest (e);
-					return;
-				}
-				httpreq.on ("error", (err) => {
-					endRequest (err);
-				});
-			};
-
-			const requestStarted = (res) => {
-				let matchresult;
-
-				httpres = res;
-				if (httpres.statusCode != 200) {
-					endRequest (`Non-success response code ${httpres.statusCode}`);
-					return;
-				}
-
-				if (typeof targetFilename == "string") {
-					destfilename = Path.join (targetDirectory, targetFilename);
-				}
-
-				if (destfilename == null) {
-					const val = httpres.headers["content-disposition"];
-					if (typeof val == "string") {
-						matchresult = val.match (/^attachment; filename=(.*)/);
-						if (matchresult != null) {
-							destfilename = Path.join (targetDirectory, matchresult[1]);
-						}
-					}
-				}
-
-				httpres.once ("error", (err) => {
-					endRequest (err);
-				});
-				httpres.on ("data", (data) => {
-					stream.write (data);
-				});
-				httpres.on ("end", responseComplete);
-			};
-
-			const responseComplete = () => {
-				stream.end ();
-				stream.once ("finish", streamFinished)
-			};
-
-			const streamFinished = () => {
-				endRequest (null);
-			};
-
-			const endRequest = (err) => {
-				if (err != null) {
-					Fs.unlink (tempfilename, () => { });
-					executeCallback (err, null);
-					return;
-				}
-
-				if (destfilename == null) {
-					// TODO: Rename the target file by parsing the last section of the URL path
-					executeCallback (null, tempfilename);
-					return;
-				}
-
-				Fs.rename (tempfilename, destfilename, renameComplete);
-			};
-
-			const renameComplete = (err) => {
-				if (err != null) {
-					Fs.unlink (tempfilename, () => { });
-					executeCallback (err, null);
-					return;
-				}
-
-				executeCallback (null, destfilename);
-			};
-		};
-
-		if (typeof endCallback == "function") {
-			execute (endCallback);
-		}
-		else {
-			return (new Promise ((resolve, reject) => {
-				execute ((err, destFile) => {
-					if (err != null) {
-						reject (Error (err));
-						return;
-					}
-					resolve (destFile);
-				});
-			}));
-		}
-	}
-
-	// Execute an HTTP GET operation for the provided URL and save response data into a string. Invokes endCallback (err, urlData) when complete. If endCallback is not provided, instead return a Promise that executes the operation.
-	fetchUrlData (targetUrl, endCallback) {
-		const execute = (executeCallback) => {
-			let url, urldata;
-
-			url = targetUrl;
-			if (typeof url == "string") {
-				url = StringUtil.parseUrl (url);
-				if (url == null) {
-					executeCallback (`Invalid URL, ${targetUrl}`, null);
-					return;
-				}
-			}
-
-			urldata = "";
-			const options = {
-				hostname: url.hostname,
-				port: url.port,
-				path: url.pathname,
-				method: "GET",
-				headers: {
-					"User-Agent": this.userAgent
-				}
-			};
-			if (url.search != "") {
-				options.path = `${options.path}${url.search}`;
-			}
-			const readCaFileComplete = (err, data) => {
-				if (err != null) {
-					Log.debug (`Failed to read TLS ca file; path=${App.TlsCaPath} err=${err}`);
-				}
-				else if (data == null) {
-					Log.debug (`Failed to read TLS ca file; path=${App.TlsCaPath} err="No file data"`);
-				}
-				else {
-					const ca = data.toString ();
-					if (ca.length > 0) {
-						options.agent = new Https.Agent ({
-							ca: [ ca ],
-							rejectUnauthorized: true
-						});
-					}
-				}
-				createRequest ();
-			};
-			const createRequest = () => {
-				let req;
-
-				try {
-					if (options.protocol == "https:") {
-						req = Https.get (options, requestStarted);
-					}
-					else {
-						req = Http.get (options, requestStarted);
-					}
-				}
-				catch (e) {
-					endRequest (e);
-					return;
-				}
-				req.on ("error", (err) => {
-					endRequest (err);
-				});
-			};
-			const requestStarted = (res) => {
-				if (res.statusCode != 200) {
-					endRequest (Error (`Non-success response code ${res.statusCode}`));
-					return;
-				}
-				res.once ("error", (err) => {
-					endRequest (err);
-				});
-				res.on ("data", (data) => {
-					urldata += data.toString ();
-				});
-				res.on ("end", () => {
-					endRequest (null);
-				});
-			};
-			const endRequest = (err) => {
-				if (err != null) {
-					executeCallback (err, null);
-					return;
-				}
-				executeCallback (null, urldata);
-			};
-
-			Log.debug2 (`fetchUrlData; targetUrl=${targetUrl}`);
-			if (url.protocol.match (/^https(:){0,1}/)) {
-				options.protocol = "https:";
-				Fs.readFile (App.TlsCaPath, readCaFileComplete);
-			}
-			else {
-				createRequest ();
-			}
-		};
-
-		if (typeof endCallback == "function") {
-			execute (endCallback);
-		}
-		else {
-			return (new Promise ((resolve, reject) => {
-				execute ((err, urlData) => {
-					if (err != null) {
-						reject (err);
-						return;
-					}
-					resolve (urlData);
-				});
-			}));
-		}
 	}
 
 	// Return a randomly generated string of characters using the specified length
@@ -2253,10 +1915,10 @@ class SystemAgent {
 		runpath = App.OpensslPath;
 		const env = { };
 		if (runpath == "") {
-			if (App.IsWindows) {
+			if (OsUtil.isWindows) {
 				runpath = "openssl.exe";
 			}
-			else if (App.IsLinux) {
+			else if (OsUtil.isLinux) {
 				runpath = "openssl/bin/openssl";
 				env.LD_LIBRARY_PATH = `${App.BIN_DIRECTORY}/openssl/lib`;
 			}
@@ -2265,10 +1927,16 @@ class SystemAgent {
 			}
 		}
 
-		const proc = new ExecProcess (runpath, runArgs, processData, processEnded);
+		const proc = new ExecProcess (runpath, runArgs);
 		proc.env = env;
 		if (typeof workingPath == "string") {
 			proc.workingPath = workingPath;
+		}
+		if (typeof processData == "function") {
+			proc.onReadLines (processData);
+		}
+		if (typeof processEnded == "function") {
+			proc.onEnd (processEnded);
 		}
 		return (proc);
 	}
@@ -2276,13 +1944,15 @@ class SystemAgent {
 	// Return a promise that executes a child process and resolves with the process isExitSuccess value if successful
 	runProcess (execPath, execArgs, envParams, workingPath, dataCallback) {
 		return (new Promise ((resolve, reject) => {
-			const proc = new ExecProcess (execPath, execArgs, (lines, lineCallback) => {
+			const proc = new ExecProcess (execPath, execArgs);
+			proc.onReadLines ((lines, lineCallback) => {
 				if (typeof dataCallback != "function") {
 					process.nextTick (lineCallback);
 					return;
 				}
 				dataCallback (lines, lineCallback);
-			}, (err, isExitSuccess) => {
+			});
+			proc.onEnd ((err, isExitSuccess) => {
 				if (err != null) {
 					reject (err);
 					return;

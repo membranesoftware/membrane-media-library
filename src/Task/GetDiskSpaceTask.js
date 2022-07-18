@@ -1,5 +1,5 @@
 /*
-* Copyright 2018-2021 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
+* Copyright 2018-2022 Membrane Software <author@membranesoftware.com> https://membranesoftware.com
 *
 * Redistribution and use in source and binary forms, with or without
 * modification, are permitted provided that the following conditions are met:
@@ -31,31 +31,23 @@
 
 const App = global.App || { };
 const Path = require ("path");
-const Log = require (Path.join (App.SOURCE_DIRECTORY, "Log"));
-const SystemInterface = require (Path.join (App.SOURCE_DIRECTORY, "SystemInterface"));
-const TaskBase = require (Path.join (App.SOURCE_DIRECTORY, "Task", "TaskBase"));
+const OsUtil = require (Path.join (App.SOURCE_DIRECTORY, "OsUtil"));
+const Task = require (Path.join (App.SOURCE_DIRECTORY, "Task", "Task"));
 
-class GetDiskSpace extends TaskBase {
-	constructor () {
-		super ();
+class GetDiskSpaceTask extends Task {
+	constructor (configureMap) {
+		super (configureMap);
 		this.name = App.uiText.getText ("GetDiskSpaceTaskName");
-
-		this.configureParams = [
-			{
-				name: "targetPath",
-				type: "string",
-				flags: SystemInterface.ParamFlag.Required | SystemInterface.ParamFlag.NotEmpty,
-				description: "The path to the target directory for the operation"
-			}
-		];
 	}
 
-	// Subclass method. Implementations should execute task actions and call end when complete.
-	doRun () {
+	async run () {
 		let execpath, processData, found, total, used, free;
 
+		if ((typeof this.configureMap.targetPath !== "string") || (this.configureMap.targetPath.length <= 0)) {
+			throw Error ("Missing configuration value: targetPath");
+		}
 		const execargs = [ ];
-		if (App.IsWindows) {
+		if (OsUtil.isWindows) {
 			execpath = "df.exe";
 			processData = (lines, dataParseCallback) => {
 				for (const line of lines) {
@@ -94,25 +86,20 @@ class GetDiskSpace extends TaskBase {
 		}
 		execargs.push (this.configureMap.targetPath);
 
-		App.systemAgent.runProcess (execpath, execargs, { }, null, processData).then ((isExitSuccess) => {
-			if (! isExitSuccess) {
-				throw Error ("df process failed");
-			}
-			if (! found) {
-				throw Error ("failed to gather disk space data");
-			}
-			this.resultObject = {
-				total: total,
-				used: used,
-				free: free
-			};
-			this.setPercentComplete (100);
-			this.isSuccess = true;
-		}).catch ((err) => {
-			Log.debug (`${this.toString ()} failed; err=${err}`);
-		}).then (() => {
-			this.end ();
-		});
+		const isExitSuccess = await App.systemAgent.runProcess (execpath, execargs, { }, null, processData);
+		if (! isExitSuccess) {
+			throw Error ("df process failed");
+		}
+		if (! found) {
+			throw Error ("failed to gather disk space data");
+		}
+		this.resultObject = {
+			total: total,
+			used: used,
+			free: free
+		};
+		this.setPercentComplete (100);
+		this.isSuccess = true;
 	}
 }
-module.exports = GetDiskSpace;
+module.exports = GetDiskSpaceTask;
